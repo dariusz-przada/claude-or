@@ -9,6 +9,7 @@
 #   claude-or --link                                   sync symlinks with aliases.json
 #   claude-or --unlink                                 remove all alias symlinks (aliases.json kept)
 #   claude-or --add <alias> <model-id> [context]       add alias to aliases.json, then --link
+#   claude-or --update <alias> <property> <value>      set model, context or small of an alias
 #   claude-or --remove <alias>...                      remove alias(es), then --link
 #   claude-or [--help]                                 help with examples
 #
@@ -110,9 +111,42 @@ unlink_aliases() {
   print "aliases.json is untouched: use claude-or <alias|model-id>, or claude-or --link to restore"
 }
 
+# Applies jq filter/args "$@" to aliases.json, replacing the file only if jq succeeds.
+write_aliases() {
+  local tmp
+  tmp="$(mktemp "$cfgdir/.aliases.XXXXXX")" || die "can't write to $cfgdir"
+  if jq "$@" < "$aliasfile" > "$tmp"; then
+    mv "$tmp" "$aliasfile"
+  else
+    rm -f "$tmp"; die "failed to update $aliasfile"
+  fi
+}
+
+# Verifies model $1 on OpenRouter and sets model_ctx to its context window. Dies if the model
+# doesn't exist; only warns if OpenRouter can't be reached (model_ctx stays empty).
+check_model() {
+  local m="$1" catalog info
+  model_ctx=""
+  catalog="$(curl -fsS -m 20 https://openrouter.ai/api/v1/models 2>/dev/null)"
+  if [[ -z "$catalog" ]]; then
+    print -u2 "warning: couldn't reach OpenRouter, model '$m' not verified"; return
+  fi
+  info="$(jq -r --arg m "$m" '.data[] | select(.id == $m)
+    | "\(.context_length // "") \((.supported_parameters // []) | index("tools") != null)"' <<< "$catalog")"
+  [[ -n "$info" ]] || die "model '$m' not found on OpenRouter (see https://openrouter.ai/models)"
+  [[ "${info#* }" == true ]] \
+    || print -u2 "warning: '$m' doesn't list tool support; Claude Code needs tool calls"
+  model_ctx="${info%% *}"
+}
+
+need_alias() {
+  jq -e --arg a "$1" '.aliases | has($a)' "$aliasfile" >/dev/null \
+    || die "alias '$1' not found in $aliasfile (see claude-or --list)"
+}
+
 add_alias() {
   (( $# == 2 || $# == 3 )) || die "usage: claude-or --add <alias> <openrouter-model-id> [context]"
-  local a="$1" m="$2" c="$3" problem catalog info tmp
+  local a="$1" m="$2" c="$3" problem model_ctx
   need_jq
   if [[ ! -e "$aliasfile" ]]; then
     mkdir -p "$cfgdir" && print '{ "aliases": {} }' > "$aliasfile"
@@ -125,44 +159,47 @@ add_alias() {
   [[ -z "$c" || "$c" == <-> ]] || die "context must be a whole number of tokens, got '$c'"
 
   # Verify the model on OpenRouter and take its context window if none was given.
-  catalog="$(curl -fsS -m 20 https://openrouter.ai/api/v1/models 2>/dev/null)"
-  if [[ -z "$catalog" ]]; then
-    print -u2 "warning: couldn't reach OpenRouter, model '$m' not verified"
-  else
-    info="$(jq -r --arg m "$m" '.data[] | select(.id == $m)
-      | "\(.context_length // "") \((.supported_parameters // []) | index("tools") != null)"' <<< "$catalog")"
-    [[ -n "$info" ]] || die "model '$m' not found on OpenRouter (see https://openrouter.ai/models)"
-    [[ "${info#* }" == true ]] \
-      || print -u2 "warning: '$m' doesn't list tool support; Claude Code needs tool calls"
-    [[ -z "$c" ]] && c="${info%% *}"
-  fi
+  check_model "$m"
+  [[ -z "$c" ]] && c="$model_ctx"
 
-  tmp="$(mktemp "$cfgdir/.aliases.XXXXXX")" || die "can't write to $cfgdir"
-  if jq --arg a "$a" --arg m "$m" --arg c "$c" \
-       '.aliases[$a] = {model: $m} + (if $c == "" then {} else {context: ($c | tonumber)} end)' \
-       "$aliasfile" > "$tmp"; then
-    mv "$tmp" "$aliasfile"
-  else
-    rm -f "$tmp"; die "failed to update $aliasfile"
-  fi
+  write_aliases --arg a "$a" --arg m "$m" --arg c "$c" \
+    '.aliases[$a] = {model: $m} + (if $c == "" then {} else {context: ($c | tonumber)} end)'
   print "added   $a -> $m${c:+ (context $c)}"
   link_aliases
+}
+
+update_alias() {
+  (( $# == 3 )) || die "usage: claude-or --update <alias> <model|context|small> <value>"
+  local a="$1" p="$2" v="$3" old model_ctx
+  need_aliases
+  need_alias "$a"
+  case "$p" in
+    model|small) check_model "$v" ;;
+    context)
+      [[ "$v" == <-> ]] && (( v > 0 )) \
+        || die "context must be a whole number of tokens, got '$v'" ;;
+    *) die "unknown property '$p' (allowed: model, context, small)" ;;
+  esac
+  old="$(jq -r --arg a "$a" --arg p "$p" '.aliases[$a][$p] // "-" | tostring' "$aliasfile")"
+
+  write_aliases --arg a "$a" --arg p "$p" --arg v "$v" \
+    '.aliases[$a][$p] = (if $p == "context" then ($v | tonumber) else $v end)'
+  print "updated $a: $p $old -> $v"
+
+  # A new model usually has a different window than the one stored for the old model.
+  if [[ "$p" == model && -n "$model_ctx" ]]; then
+    old="$(jq -r --arg a "$a" '.aliases[$a].context // "" | tostring' "$aliasfile")"
+    [[ "$old" == "$model_ctx" ]] || print -u2 "note: '$v' has a $model_ctx-token context window," \
+      "alias has ${old:-none}; to match: claude-or --update $a context $model_ctx"
+  fi
 }
 
 remove_alias() {
   (( $# >= 1 )) || die "usage: claude-or --remove <alias>..."
   need_aliases
-  local a tmp
-  for a in "$@"; do
-    jq -e --arg a "$a" '.aliases | has($a)' "$aliasfile" >/dev/null \
-      || die "alias '$a' not found in $aliasfile (see claude-or --list)"
-  done
-  tmp="$(mktemp "$cfgdir/.aliases.XXXXXX")" || die "can't write to $cfgdir"
-  if jq --args 'reduce $ARGS.positional[] as $a (.; del(.aliases[$a]))' "$@" < "$aliasfile" > "$tmp"; then
-    mv "$tmp" "$aliasfile"
-  else
-    rm -f "$tmp"; die "failed to update $aliasfile"
-  fi
+  local a
+  for a in "$@"; do need_alias "$a"; done
+  write_aliases --args 'reduce $ARGS.positional[] as $a (.; del(.aliases[$a]))' "$@"
   link_aliases
 }
 
@@ -179,6 +216,9 @@ Commands:
   claude-or --list                              show aliases (name, model, context, background model)
   claude-or --add <alias> <model-id> [context]  validate and add an alias, then --link
                                                 (context defaults to the model's window on OpenRouter)
+  claude-or --update <alias> <property> <value>
+                                                validate and set an alias property:
+                                                model, small (OpenRouter model id), context (tokens)
   claude-or --remove <alias>...                 remove alias(es) and their symlinks
   claude-or --link                              sync symlinks with aliases.json
   claude-or --unlink                            remove all alias symlinks; aliases.json is kept,
@@ -192,6 +232,8 @@ Examples:
   claude-or moonshotai/kimi-k3                  try a model once without an alias
   OR_CONTEXT=262144 claude-or qwen/qwen3-coder  same, with its real context window
   claude-or --add ccluna openai/gpt-6-luna      add alias ccluna
+  claude-or --update ccluna small openai/gpt-5-nano
+                                                cheaper background model for ccluna
   claude-or --remove ccluna                     remove it again
 
 Config: $cfgdir/
@@ -216,6 +258,7 @@ case "$name" in
       --link)   link_aliases; exit ;;
       --unlink) unlink_aliases; exit ;;
       --add)    shift; add_alias "$@"; exit ;;
+      --update) shift; update_alias "$@"; exit ;;
       --remove) shift; remove_alias "$@"; exit ;;
       ""|-h|--help) show_help; exit ;;
       -*)       die "unknown option '$1' (see claude-or --help)" ;;

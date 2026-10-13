@@ -6,8 +6,8 @@ Anthropic-compatible endpoint, using short commands that you define yourself, fo
 
 - **You choose the commands.** Each one is an alias in
   [`aliases.json`](#aliases-config-file-aliasesjson) that maps a name to an OpenRouter model. Add,
-  change or remove them with `claude-or --add` / `--remove` or by editing the file. You never need
-  to touch the script.
+  change or remove them with `claude-or --add` / `--update` / `--remove` or by editing the file.
+  You never need to touch the script.
 - The environment variables apply only to that one `claude` process. Plain `claude` keeps using
   your normal Anthropic / claude.ai login.
 - The commands are real executables in `PATH`, not shell aliases, so they also work from scripts
@@ -28,6 +28,7 @@ Anthropic-compatible endpoint, using short commands that you define yourself, fo
   - [With `--add` (recommended)](#with---add-recommended)
   - [By hand](#by-hand)
   - [Other options](#other-options)
+- [Change an alias](#change-an-alias)
 - [Remove an alias](#remove-an-alias)
 - [Use only `claude-or`, without alias commands](#use-only-claude-or-without-alias-commands)
 - [Delegating from a Claude Code session](#delegating-from-a-claude-code-session)
@@ -36,7 +37,7 @@ Anthropic-compatible endpoint, using short commands that you define yourself, fo
 
 ## Requirements: `jq`
 
-Aliases (`aliases.json`, `--add`, `--remove`, `--list`, `--link`) need [`jq`](https://jqlang.org).
+Aliases (`aliases.json`, `--add`, `--update`, `--remove`, `--list`, `--link`) need [`jq`](https://jqlang.org).
 
 - **macOS 15+**: built in (`/usr/bin/jq`).
 - **Older macOS**: `brew install jq`
@@ -75,6 +76,7 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --link` | Sync symlinks with `aliases.json` (create new, remove deleted) |
 | `claude-or --unlink` | Remove all alias symlinks, keeping `aliases.json` |
 | `claude-or --add <alias> <model-id> [context]` | Validate and add an alias to `aliases.json`, then `--link` |
+| `claude-or --update <alias> <property> <value>` | Validate and set an alias's `model`, `small` or `context` |
 | `claude-or --remove <alias>...` | Remove alias(es) from `aliases.json` and their symlinks |
 | `claude-or`, `claude-or --help` | Help with all commands, examples and your current aliases |
 
@@ -183,7 +185,8 @@ curl -s https://openrouter.ai/api/v1/models | jq -r '.data[] | select(.id | test
 
 ### By hand
 
-Use this route to set fields `--add` doesn't cover, such as `small`.
+Use this route to write a whole entry at once. To set `small` or change a single field on an
+existing alias, [`--update`](#change-an-alias) is simpler.
 
 1. **Add an entry** to the `aliases` object in `~/.config/claude-or/aliases.json`. Mind the comma
    after the previous entry:
@@ -213,6 +216,27 @@ Use this route to set fields `--add` doesn't cover, such as `small`.
 To use an alias without a symlink, run `claude-or ccluna`. To try a model once without any alias,
 run `claude-or <model-id>` (put `OR_CONTEXT=<tokens>` in front if its window isn't 200k).
 
+## Change an alias
+
+```bash
+claude-or --update ccfree small openai/gpt-5-nano   # cheaper background model
+claude-or --update ccluna context 500000            # smaller context window
+claude-or --update ccqwen model qwen/qwen3-coder    # point the alias at another model
+```
+
+Before writing anything, `--update` checks that:
+
+- the alias exists in `aliases.json`;
+- the property is `model`, `small` or `context`;
+- for `model` and `small`, the model exists on OpenRouter (with the same tool-support warning and
+  offline fallback as `--add`); for `context`, the value is a positive whole number of tokens.
+
+When you change `model`, the stored `context` still belongs to the old model. If the new model's
+window on OpenRouter differs, `--update` prints the command that sets it.
+
+The alias name doesn't change, so its symlink stays as it is. To rename an alias, `--add` the new
+name and `--remove` the old one.
+
 ## Remove an alias
 
 ```bash
@@ -225,7 +249,7 @@ the entries and runs `--link`, which deletes the matching symlinks.
 
 By hand: delete the entry from `aliases.json` and run `claude-or --link`.
 
-`--add` and `--remove` rewrite `aliases.json` with `jq`, so one-line entries come back expanded
+`--add`, `--update` and `--remove` rewrite `aliases.json` with `jq`, so one-line entries come back expanded
 to several lines. The content stays the same.
 
 ## Use only `claude-or`, without alias commands
