@@ -11,6 +11,7 @@
 #   claude-or --add <alias> <model-id> [context]       add alias to aliases.json, then --link
 #   claude-or --update <alias> <property> <value>      set model, context or small of an alias
 #   claude-or --remove <alias>...                      remove alias(es), then --link
+#   claude-or --self-update                            update to the latest release tag
 #   claude-or [--help]                                 help with examples
 #
 # Config dir: ${XDG_CONFIG_HOME:-~/.config}/claude-or/
@@ -203,6 +204,36 @@ remove_alias() {
   link_aliases
 }
 
+# Replaces this script with the one from the newest version tag on GitHub; aliases.json is kept.
+self_update() {
+  setopt localoptions extendedglob
+  local repo=dariusz-przada/claude-or tag tmp
+  local -a tags
+  tags=(${(f)"$(curl -fsS -m 20 "https://api.github.com/repos/$repo/tags?per_page=100" 2>/dev/null \
+    | sed -n 's/.*"name": *"\([^"]*\)".*/\1/p')"})
+  tags=(${(M)tags:#(v|)<->(.<->)#})
+  (( $#tags )) || die "couldn't find a release tag on github.com/$repo"
+  tags=(${(On)tags})   # newest first, numeric: v1.10.0 before v1.9.0
+  tag="$tags[1]"
+
+  tmp="$(mktemp "${self:h}/.claude-or.XXXXXX")" || die "can't write to ${self:h}"
+  if ! curl -fsSL -m 30 "https://raw.githubusercontent.com/$repo/$tag/claude-or" -o "$tmp"; then
+    rm -f "$tmp"; die "download of $tag failed"
+  fi
+  # Guard against an error page or a truncated download replacing a working script.
+  if [[ "$(head -1 "$tmp")" != '#!/bin/zsh' ]] || ! zsh -n "$tmp"; then
+    rm -f "$tmp"; die "downloaded $tag doesn't look like claude-or, not updated"
+  fi
+  if cmp -s "$tmp" "$self"; then
+    rm -f "$tmp"; print "already up to date ($tag)"; return
+  fi
+  chmod 755 "$tmp" && mv "$tmp" "$self" || { rm -f "$tmp"; die "can't replace $self"; }
+  print "updated $self to $tag"
+  # Re-link with the new version, in case it changed how aliases are linked.
+  whence -p jq >/dev/null && [[ -r "$aliasfile" ]] && "$self" --link
+  return 0
+}
+
 show_help() {
   cat <<EOF
 claude-or: run Claude Code against OpenRouter models (DeepSeek, Kimi, GLM, Qwen, ...)
@@ -223,7 +254,8 @@ Commands:
   claude-or --link                              sync symlinks with aliases.json
   claude-or --unlink                            remove all alias symlinks; aliases.json is kept,
                                                 so claude-or <alias> still works
-  claude-or --help                              this help
+  claude-or --self-update                       update to the latest release tag (aliases.json kept)
+  claude-or --help                             this help
 
 Examples:
   ccds                                          interactive session on DeepSeek V4 Pro
@@ -260,6 +292,7 @@ case "$name" in
       --add)    shift; add_alias "$@"; exit ;;
       --update) shift; update_alias "$@"; exit ;;
       --remove) shift; remove_alias "$@"; exit ;;
+      --self-update) self_update; exit ;;
       ""|-h|--help) show_help; exit ;;
       -*)       die "unknown option '$1' (see claude-or --help)" ;;
     esac

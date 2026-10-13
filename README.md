@@ -78,6 +78,7 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --add <alias> <model-id> [context]` | Validate and add an alias to `aliases.json`, then `--link` |
 | `claude-or --update <alias> <property> <value>` | Validate and set an alias's `model`, `small` or `context` |
 | `claude-or --remove <alias>...` | Remove alias(es) from `aliases.json` and their symlinks |
+| `claude-or --self-update` | Replace the installed script with the latest release tag from GitHub, keeping `aliases.json` |
 | `claude-or`, `claude-or --help` | Help with all commands, examples and your current aliases |
 
 ## Install
@@ -90,8 +91,8 @@ curl -fsSL "$R/claude-or" -o ~/.local/bin/claude-or && chmod +x ~/.local/bin/cla
 ~/.local/bin/claude-or --link
 ```
 
-Make sure `~/.local/bin` is in your `PATH`. To update, run the same commands again: they replace
-the script but keep your own `aliases.json`.
+Make sure `~/.local/bin` is in your `PATH`. To update, run `claude-or --self-update` (or the same
+commands again): it replaces the script with the latest release tag but keeps your own `aliases.json`.
 
 Install by copying the script, as above, not by symlinking it from a clone of this repo.
 `claude-or` creates the alias symlinks next to its real path, so with a symlinked install they
