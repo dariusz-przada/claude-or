@@ -1,0 +1,12 @@
+# OS
+.DS_Store
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*~
+
+# Secrets: never commit an OpenRouter key copied here while testing
+api_key
+.env
