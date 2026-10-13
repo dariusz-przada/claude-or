@@ -1,0 +1,13 @@
+{
+  "defaults": {
+    "small": "deepseek/deepseek-v4-flash"
+  },
+  "aliases": {
+    "ccds":     { "model": "deepseek/deepseek-v4-pro",   "context": 1048576 },
+    "ccdsf":    { "model": "deepseek/deepseek-v4-flash", "context": 1048576 },
+    "cckimi":   { "model": "moonshotai/kimi-k3",         "context": 1048576 },
+    "ccglm":    { "model": "z-ai/glm-5.3",               "context": 1048576 },
+    "ccqwen":   { "model": "qwen/qwen3-coder-next",      "context": 262144 },
+    "ccfree":   { "model": "openrouter/free",            "context": 200000, "small": "openrouter/free" }
+  }
+}

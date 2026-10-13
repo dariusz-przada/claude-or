@@ -1,0 +1,270 @@
+#!/bin/zsh
+# Claude Code via OpenRouter (Anthropic-compatible endpoint).
+# Env vars apply only to this process; plain `claude` keeps your Anthropic login.
+#
+#   claude-or <openrouter-model-id> [claude args...]   any model, no alias needed
+#   claude-or <alias> [claude args...]                 alias from aliases.json
+#   <alias> [claude args...]                           via symlink named like the alias
+#   claude-or --list                                   show aliases
+#   claude-or --link                                   sync symlinks with aliases.json
+#   claude-or --unlink                                 remove all alias symlinks (aliases.json kept)
+#   claude-or --add <alias> <model-id> [context]       add alias to aliases.json, then --link
+#   claude-or --remove <alias>...                      remove alias(es), then --link
+#   claude-or [--help]                                 help with examples
+#
+# Config dir: ${XDG_CONFIG_HOME:-~/.config}/claude-or/
+#   aliases.json   {"defaults": {"small": "<model>"},
+#                   "aliases": {"<name>": {"model": "<id>", "context": <tokens>, "small": "<id>"}}}
+#                  "context" and "small" are optional.
+#   api_key        OpenRouter key (chmod 600)
+#
+# Key lookup: macOS Keychain service "openrouter-api-key", else $OPENROUTER_API_KEY,
+# else <config dir>/api_key.
+#   security add-generic-password -a "$USER" -s openrouter-api-key -w
+
+cfgdir="${XDG_CONFIG_HOME:-$HOME/.config}/claude-or"
+aliasfile="$cfgdir/aliases.json"
+self="${0:A}"   # real script path (symlinks resolved)
+name="${0:t}"
+
+die() { print -u2 "${name}: $*"; exit 1; }
+
+# Aliases need jq; running a model id directly (claude-or vendor/model) doesn't.
+need_jq() {
+  whence -p jq >/dev/null && return
+  local hint="brew install jq"
+  [[ "$OSTYPE" == linux* ]] && hint="sudo apt install jq  (or: dnf / pacman / apk install jq)"
+  die "aliases need jq, which isn't installed. Install it: $hint
+Without jq you can still run a model directly: claude-or <vendor/model-id>"
+}
+
+need_aliases() {
+  need_jq
+  [[ -r "$aliasfile" ]] || die "no alias file: $aliasfile"
+  jq -e '.aliases | type == "object"' "$aliasfile" >/dev/null 2>&1 \
+    || die "$aliasfile: invalid JSON or missing \"aliases\" object"
+}
+
+# Sets model / ctx / small for alias $1; returns 1 if the alias doesn't exist.
+load_alias() {
+  local vars
+  vars="$(jq -r --arg a "$1" '
+    .defaults.small as $ds
+    | .aliases[$a] // empty
+    | "model=\(.model // "" | @sh) ctx=\(.context // "" | tostring | @sh) small=\(.small // $ds // "" | @sh)"
+  ' "$aliasfile")" || return 1
+  [[ -n "$vars" ]] || return 1
+  eval "$vars"
+  [[ -n "$model" ]] || die "alias '$1' has no \"model\" in $aliasfile"
+}
+
+list_aliases() {
+  need_aliases
+  jq -r '.defaults.small as $ds | .aliases | to_entries[]
+    | [.key, .value.model, (.value.context // "-" | tostring), (.value.small // $ds // "-")] | @tsv' "$aliasfile" \
+    | column -t -s $'\t'
+}
+
+# Prints why alias name $1 can't get a symlink; prints nothing if it can.
+name_problem() {
+  local a="$1" target="${self:h}/$1" other
+  if [[ ! "$a" =~ '^[A-Za-z0-9_.-]+$' || "$a" == claude-or ]]; then
+    print "invalid alias name '$a' (allowed: letters, digits, . _ -)"; return
+  fi
+  if [[ -e "$target" && ! ( -L "$target" && "$(readlink "$target")" == claude-or ) ]]; then
+    print "$target exists and is not a claude-or symlink"; return
+  fi
+  other="$(whence -pa "$a" | grep -vx "$target" | head -1)"
+  [[ -n "$other" ]] && print "'$a' would shadow $other, pick another name"
+}
+
+link_aliases() {
+  need_aliases
+  local bindir="${self:h}" a target problem
+  local -a want
+  want=("${(@f)$(jq -r '.aliases | keys[]' "$aliasfile")}")
+  for a in $want; do
+    problem="$(name_problem "$a")"
+    if [[ -n "$problem" ]]; then
+      print -u2 "skip $a: $problem"; continue
+    fi
+    target="$bindir/$a"
+    ln -sfn claude-or "$target"
+    print "linked  $a"
+  done
+  # Drop symlinks to this script whose alias was removed from the JSON.
+  for target in "$bindir"/*(N@); do
+    a="${target:t}"
+    [[ "$(readlink "$target")" == claude-or && ${want[(Ie)$a]} -eq 0 ]] || continue
+    rm "$target" && print "removed $a"
+  done
+}
+
+unlink_aliases() {
+  local target n=0
+  for target in "${self:h}"/*(N@); do
+    [[ "$(readlink "$target")" == claude-or ]] || continue
+    rm "$target" && print "removed ${target:t}" && (( n++ ))
+  done
+  (( n )) || print "no alias symlinks to remove"
+  print "aliases.json is untouched: use claude-or <alias|model-id>, or claude-or --link to restore"
+}
+
+add_alias() {
+  (( $# == 2 || $# == 3 )) || die "usage: claude-or --add <alias> <openrouter-model-id> [context]"
+  local a="$1" m="$2" c="$3" problem catalog info tmp
+  need_jq
+  if [[ ! -e "$aliasfile" ]]; then
+    mkdir -p "$cfgdir" && print '{ "aliases": {} }' > "$aliasfile"
+  fi
+  need_aliases
+  jq -e --arg a "$a" '.aliases | has($a)' "$aliasfile" >/dev/null \
+    && die "alias '$a' already exists in $aliasfile"
+  problem="$(name_problem "$a")"
+  [[ -z "$problem" ]] || die "$problem"
+  [[ -z "$c" || "$c" == <-> ]] || die "context must be a whole number of tokens, got '$c'"
+
+  # Verify the model on OpenRouter and take its context window if none was given.
+  catalog="$(curl -fsS -m 20 https://openrouter.ai/api/v1/models 2>/dev/null)"
+  if [[ -z "$catalog" ]]; then
+    print -u2 "warning: couldn't reach OpenRouter, model '$m' not verified"
+  else
+    info="$(jq -r --arg m "$m" '.data[] | select(.id == $m)
+      | "\(.context_length // "") \((.supported_parameters // []) | index("tools") != null)"' <<< "$catalog")"
+    [[ -n "$info" ]] || die "model '$m' not found on OpenRouter (see https://openrouter.ai/models)"
+    [[ "${info#* }" == true ]] \
+      || print -u2 "warning: '$m' doesn't list tool support; Claude Code needs tool calls"
+    [[ -z "$c" ]] && c="${info%% *}"
+  fi
+
+  tmp="$(mktemp "$cfgdir/.aliases.XXXXXX")" || die "can't write to $cfgdir"
+  if jq --arg a "$a" --arg m "$m" --arg c "$c" \
+       '.aliases[$a] = {model: $m} + (if $c == "" then {} else {context: ($c | tonumber)} end)' \
+       "$aliasfile" > "$tmp"; then
+    mv "$tmp" "$aliasfile"
+  else
+    rm -f "$tmp"; die "failed to update $aliasfile"
+  fi
+  print "added   $a -> $m${c:+ (context $c)}"
+  link_aliases
+}
+
+remove_alias() {
+  (( $# >= 1 )) || die "usage: claude-or --remove <alias>..."
+  need_aliases
+  local a tmp
+  for a in "$@"; do
+    jq -e --arg a "$a" '.aliases | has($a)' "$aliasfile" >/dev/null \
+      || die "alias '$a' not found in $aliasfile (see claude-or --list)"
+  done
+  tmp="$(mktemp "$cfgdir/.aliases.XXXXXX")" || die "can't write to $cfgdir"
+  if jq --args 'reduce $ARGS.positional[] as $a (.; del(.aliases[$a]))' "$@" < "$aliasfile" > "$tmp"; then
+    mv "$tmp" "$aliasfile"
+  else
+    rm -f "$tmp"; die "failed to update $aliasfile"
+  fi
+  link_aliases
+}
+
+show_help() {
+  cat <<EOF
+claude-or: run Claude Code against OpenRouter models (DeepSeek, Kimi, GLM, Qwen, ...)
+
+Usage:
+  <alias> [claude args...]                      run an alias, e.g. ccds
+  claude-or <alias> [claude args...]            same, without needing the symlink
+  claude-or <model-id> [claude args...]         any OpenRouter model, no alias needed
+
+Commands:
+  claude-or --list                              show aliases (name, model, context, background model)
+  claude-or --add <alias> <model-id> [context]  validate and add an alias, then --link
+                                                (context defaults to the model's window on OpenRouter)
+  claude-or --remove <alias>...                 remove alias(es) and their symlinks
+  claude-or --link                              sync symlinks with aliases.json
+  claude-or --unlink                            remove all alias symlinks; aliases.json is kept,
+                                                so claude-or <alias> still works
+  claude-or --help                              this help
+
+Examples:
+  ccds                                          interactive session on DeepSeek V4 Pro
+  ccds -p "explain this repo" < /dev/null       one-shot, headless (e.g. from another Claude session)
+  claude-or ccdsf --resume                      resume a session on DeepSeek V4 Flash
+  claude-or moonshotai/kimi-k3                  try a model once without an alias
+  OR_CONTEXT=262144 claude-or qwen/qwen3-coder  same, with its real context window
+  claude-or --add ccmm minimax/minimax-m3       add alias ccmm
+  claude-or --remove ccmm                       remove it again
+
+Config: $cfgdir/
+  aliases.json  alias definitions (edit by hand, then run claude-or --link)
+  api_key       OpenRouter key; or Keychain service "openrouter-api-key"; or \$OPENROUTER_API_KEY
+Overrides: OR_CONTEXT (context window), OR_SMALL_MODEL (background model)
+EOF
+  if ! whence -p jq >/dev/null; then
+    print "\nAliases need jq (not installed); claude-or <vendor/model-id> works without it."
+  elif [[ -r "$aliasfile" ]] && jq -e '.aliases | length > 0' "$aliasfile" >/dev/null 2>&1; then
+    print "\nAliases:"
+    list_aliases | sed 's/^/  /'
+  else
+    print "\nNo aliases yet: claude-or --add <alias> <model-id>"
+  fi
+}
+
+case "$name" in
+  claude-or)
+    case "$1" in
+      --list)   list_aliases; exit ;;
+      --link)   link_aliases; exit ;;
+      --unlink) unlink_aliases; exit ;;
+      --add)    shift; add_alias "$@"; exit ;;
+      --remove) shift; remove_alias "$@"; exit ;;
+      ""|-h|--help) show_help; exit ;;
+      -*)       die "unknown option '$1' (see claude-or --help)" ;;
+    esac
+    if [[ "$1" != */* ]]; then
+      # No slash: not an OpenRouter model id (those are vendor/model), so it must be an alias.
+      need_aliases
+      load_alias "$1" || die "'$1' is neither an alias (see claude-or --list) nor a vendor/model id"
+    else
+      model="$1"
+      [[ -r "$aliasfile" ]] && whence -p jq >/dev/null \
+        && small="$(jq -r '.defaults.small // empty' "$aliasfile" 2>/dev/null)"
+    fi
+    shift ;;
+  *)
+    need_aliases
+    load_alias "$name" || die "alias '$name' not found in $aliasfile"
+    ;;
+esac
+
+ctx="${OR_CONTEXT:-$ctx}"
+small="${OR_SMALL_MODEL:-${small:-$model}}"
+
+key="$(security find-generic-password -a "$USER" -s openrouter-api-key -w 2>/dev/null)"
+[[ -z "$key" ]] && key="$OPENROUTER_API_KEY"
+[[ -z "$key" && -r "$cfgdir/api_key" ]] && key="$(<"$cfgdir/api_key")"
+[[ -n "$key" ]] || die "no OpenRouter key (Keychain 'openrouter-api-key', \$OPENROUTER_API_KEY or $cfgdir/api_key)"
+
+# Every model tier in /model (Fable, Opus, Sonnet, Haiku) points at OpenRouter models: a tier left
+# unset keeps its Claude default and OpenRouter would bill it at Anthropic prices.
+desc="OpenRouter via claude-or"
+
+# CLAUDECODE is unset so this also runs when launched from inside a Claude Code session.
+# CLAUDE_CODE_MAX_CONTEXT_TOKENS: Claude Code doesn't know these models and would assume 200k.
+exec env -u CLAUDECODE \
+  ANTHROPIC_BASE_URL="https://openrouter.ai/api" \
+  ANTHROPIC_AUTH_TOKEN="$key" \
+  ANTHROPIC_API_KEY="" \
+  ANTHROPIC_MODEL="$model" \
+  ANTHROPIC_DEFAULT_FABLE_MODEL="$model" \
+  ANTHROPIC_DEFAULT_OPUS_MODEL="$model" \
+  ANTHROPIC_DEFAULT_SONNET_MODEL="$model" \
+  ANTHROPIC_DEFAULT_HAIKU_MODEL="$small" \
+  ANTHROPIC_DEFAULT_FABLE_MODEL_DESCRIPTION="$desc" \
+  ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION="$desc" \
+  ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION="$desc" \
+  ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION="$desc, background model" \
+  ANTHROPIC_SMALL_FAST_MODEL="$small" \
+  CLAUDE_CODE_SUBAGENT_MODEL="$model" \
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+  ${ctx:+CLAUDE_CODE_MAX_CONTEXT_TOKENS=$ctx} \
+  claude "$@"
