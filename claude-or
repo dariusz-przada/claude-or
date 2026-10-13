@@ -191,8 +191,8 @@ Examples:
   claude-or ccdsf --resume                      resume a session on DeepSeek V4 Flash
   claude-or moonshotai/kimi-k3                  try a model once without an alias
   OR_CONTEXT=262144 claude-or qwen/qwen3-coder  same, with its real context window
-  claude-or --add ccmm minimax/minimax-m3       add alias ccmm
-  claude-or --remove ccmm                       remove it again
+  claude-or --add ccluna openai/gpt-6-luna      add alias ccluna
+  claude-or --remove ccluna                     remove it again
 
 Config: $cfgdir/
   aliases.json  alias definitions (edit by hand, then run claude-or --link)

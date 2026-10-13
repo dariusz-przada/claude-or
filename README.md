@@ -4,9 +4,10 @@ Run the Claude Code CLI against any model on [OpenRouter](https://openrouter.ai)
 Anthropic-compatible endpoint, using short commands that you define yourself, for example
 `ccds` for DeepSeek V4 Pro.
 
-- **You choose the commands.** Each one is an alias in [`aliases.json`](#aliasesjson) that maps a
-  name to an OpenRouter model. Add, change or remove them with `claude-or --add` / `--remove` or
-  by editing the file. You never need to touch the script.
+- **You choose the commands.** Each one is an alias in
+  [`aliases.json`](#aliases-config-file-aliasesjson) that maps a name to an OpenRouter model. Add,
+  change or remove them with `claude-or --add` / `--remove` or by editing the file. You never need
+  to touch the script.
 - The environment variables apply only to that one `claude` process. Plain `claude` keeps using
   your normal Anthropic / claude.ai login.
 - The commands are real executables in `PATH`, not shell aliases, so they also work from scripts
@@ -19,11 +20,10 @@ Anthropic-compatible endpoint, using short commands that you define yourself, fo
 
 - [Requirements: `jq`](#requirements-jq)
 - [Commands](#commands)
-  - [`ccfree`: free models](#ccfree-free-models)
 - [Install](#install)
 - [Files](#files)
 - [API key](#api-key)
-- [`aliases.json`](#aliasesjson)
+- [Aliases config file (`aliases.json`)](#aliases-config-file-aliasesjson)
 - [Add a new alias](#add-a-new-alias)
   - [With `--add` (recommended)](#with---add-recommended)
   - [By hand](#by-hand)
@@ -60,7 +60,7 @@ Default aliases from `aliases.json`:
 | `cckimi` | `moonshotai/kimi-k3` | 1M |
 | `ccglm` | `z-ai/glm-5.3` | 1M |
 | `ccqwen` | `qwen/qwen3-coder-next` | 262k |
-| `ccfree` | `openrouter/free` (free router, see below) | 200k |
+| `ccfree` | `openrouter/free` (OpenRouter's free-model router) | 200k |
 
 Every command passes the rest of its arguments straight to `claude`, for example
 `ccds -p "explain this repo"` or `ccds --resume`.
@@ -77,17 +77,6 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --add <alias> <model-id> [context]` | Validate and add an alias to `aliases.json`, then `--link` |
 | `claude-or --remove <alias>...` | Remove alias(es) from `aliases.json` and their symlinks |
 | `claude-or`, `claude-or --help` | Help with all commands, examples and your current aliases |
-
-### `ccfree`: free models
-
-`openrouter/free` is OpenRouter's router across its currently free models. It costs nothing, but:
-
-- Free models are rate-limited and vary in quality, and the model behind the router can change
-  between requests.
-- Free providers may log or train on your prompts. Claude Code also sends your project's
-  `CLAUDE.md` and the code it reads, so don't use it in repos with confidential code.
-- Ask it which model it is and it will say "Claude", because Claude Code's system prompt tells it
-  so. Check [openrouter.ai/activity](https://openrouter.ai/activity) for the real model.
 
 ## Install
 
@@ -134,7 +123,7 @@ The script looks for the key in this order:
 GUI apps such as the Claude desktop app may not see variables exported in `~/.zshrc`. If you want
 a Claude Code session to call these commands, use the Keychain or the key file.
 
-## `aliases.json`
+## Aliases config file (`aliases.json`)
 
 ```json
 {
@@ -171,8 +160,8 @@ that name. The script itself never needs editing. `claude-or --add` does both in
 ### With `--add` (recommended)
 
 ```bash
-claude-or --add ccmm minimax/minimax-m3          # context taken from OpenRouter
-claude-or --add ccmm minimax/minimax-m3 500000   # or set it yourself
+claude-or --add ccluna openai/gpt-6-luna            # context taken from OpenRouter
+claude-or --add ccluna openai/gpt-6-luna 500000     # or set it yourself
 ```
 
 Before writing anything, `--add` checks that:
@@ -189,7 +178,7 @@ To find model ids and context windows, browse [openrouter.ai/models](https://ope
 or query the API:
 
 ```bash
-curl -s https://openrouter.ai/api/v1/models | jq -r '.data[] | select(.id | test("minimax")) | "\(.id)  \(.context_length)"'
+curl -s https://openrouter.ai/api/v1/models | jq -r '.data[] | select(.id | test("luna")) | "\(.id)  \(.context_length)"'
 ```
 
 ### By hand
@@ -199,7 +188,7 @@ Use this route to set fields `--add` doesn't cover, such as `small`.
 1. **Add an entry** to the `aliases` object in `~/.config/claude-or/aliases.json`. Mind the comma
    after the previous entry:
    ```json
-   "ccmm": { "model": "minimax/minimax-m3", "context": 1048576, "small": "minimax/minimax-m3" }
+   "ccluna": { "model": "openai/gpt-6-luna", "context": 1050000, "small": "openai/gpt-6-luna" }
    ```
 
 2. **Create the symlink.** Either sync all of them:
@@ -208,27 +197,27 @@ Use this route to set fields `--add` doesn't cover, such as `small`.
    ```
    or add just this one:
    ```bash
-   ln -s claude-or ~/.local/bin/ccmm
+   ln -s claude-or ~/.local/bin/ccluna
    ```
    `--link` refuses a name that already exists as another command, so an alias can't shadow a
-   real tool. If you create the symlink yourself, check first with `command -v ccmm`.
+   real tool. If you create the symlink yourself, check first with `command -v ccluna`.
 
 3. **Test it:**
    ```bash
    claude-or --list
-   ccmm -p "say hi" < /dev/null
+   ccluna -p "say hi" < /dev/null
    ```
 
 ### Other options
 
-To use an alias without a symlink, run `claude-or ccmm`. To try a model once without any alias,
+To use an alias without a symlink, run `claude-or ccluna`. To try a model once without any alias,
 run `claude-or <model-id>` (put `OR_CONTEXT=<tokens>` in front if its window isn't 200k).
 
 ## Remove an alias
 
 ```bash
-claude-or --remove ccmm            # one
-claude-or --remove ccmm ccm2       # several
+claude-or --remove ccluna          # one
+claude-or --remove ccluna ccqwen   # several
 ```
 
 It first checks that every name exists, so a typo leaves `aliases.json` untouched. Then it removes
