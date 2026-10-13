@@ -1,15 +1,19 @@
 # Claude Code + OpenRouter (DeepSeek, Kimi, GLM, Qwen…)
 
 Run the Claude Code CLI against any model on [OpenRouter](https://openrouter.ai) through its
-Anthropic-compatible endpoint, with short commands such as `ccds` for DeepSeek V4 Pro.
+Anthropic-compatible endpoint, using short commands that you define yourself, for example
+`ccds` for DeepSeek V4 Pro.
 
+- **You choose the commands.** Each one is an alias in [`aliases.json`](#aliasesjson) that maps a
+  name to an OpenRouter model. Add, change or remove them with `claude-or --add` / `--remove` or
+  by editing the file. You never need to touch the script.
 - The environment variables apply only to that one `claude` process. Plain `claude` keeps using
   your normal Anthropic / claude.ai login.
-- Aliases are defined in a JSON file, so you never need to edit the script.
 - The commands are real executables in `PATH`, not shell aliases, so they also work from scripts
   and when a running Claude Code session calls them via its Bash tool.
-- macOS or Linux with `zsh`, `curl` and Claude Code. On Linux, the Keychain lookup simply finds
-  nothing, so use the env var or the key file.
+- Runs on macOS or Linux with `zsh`, `curl`, [`jq`](#requirements-jq) and Claude Code. On Linux
+  there is no Keychain, so supply the key through the env var or the key file
+  (see [API key](#api-key)).
 
 ## Contents
 
