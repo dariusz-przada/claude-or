@@ -13,7 +13,7 @@ Anthropic-compatible endpoint, using short commands that you define yourself, fo
 - The commands are real executables in `PATH`, not shell aliases, so they also work from scripts
   and when a running Claude Code session calls them via its Bash tool.
 - Runs on macOS or Linux with `zsh`, `curl`, [`jq`](#requirements-jq) and Claude Code. On Linux
-  there is no Keychain, so supply the key through the env var or the key file
+  there is no Keychain, so save the key with `claude-or --key-add` or use the env var
   (see [API key](#api-key)).
 
 ## Contents
@@ -37,7 +37,8 @@ Anthropic-compatible endpoint, using short commands that you define yourself, fo
 
 ## Requirements: `jq`
 
-Aliases (`aliases.json`, `--add`, `--update`, `--remove`, `--list`, `--link`) need [`jq`](https://jqlang.org).
+Aliases (`aliases.json`, `--add`, `--update`, `--remove`, `--list`, `--link`) and the
+[key manager](#api-key) (`--key-*`) need [`jq`](https://jqlang.org).
 
 - **macOS 15+**: built in (`/usr/bin/jq`).
 - **Older macOS**: `brew install jq`
@@ -79,8 +80,10 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --update <alias> <property> <value>` | Validate and set an alias's `model`, `small` or `context` |
 | `claude-or --remove <alias>...` | Remove alias(es) from `aliases.json` and their symlinks |
 | `claude-or --self-update` | Replace the installed script with the latest release tag from GitHub, keeping `aliases.json` |
-| `claude-or --set-key` | Verify an OpenRouter key and save it to `api_key` (hidden prompt or pipe; asks before replacing an existing key) |
-| `claude-or --unset-key` | Delete the `api_key` file |
+| `claude-or --key-add <name> [key]` | Verify an OpenRouter key and save it under a name; without `[key]` it's read from a hidden prompt or a pipe |
+| `claude-or --key-remove <index\|name>...` | Delete saved key(s) |
+| `claude-or --key-list` | Show saved keys: active (`*`), index, name, masked key |
+| `claude-or --key-switch <index\|name>` | Make a saved key the active one |
 | `claude-or`, `claude-or --help` | Help with all commands, examples and your current aliases |
 
 ## Install
@@ -107,37 +110,46 @@ Everything lives in `~/.config/claude-or/` (or `$XDG_CONFIG_HOME/claude-or/`):
 | File | Purpose |
 |---|---|
 | `aliases.json` | Alias → model definitions |
-| `api_key` | OpenRouter API key (optional, see below) |
+| `keys.json` | Saved OpenRouter keys and which one is active (mode 600, see [API key](#api-key)) |
 
 ## API key
 
+Save one or more OpenRouter keys under names and pick which one is active:
+
+```bash
+claude-or --key-add work                   # prompts for the key (hidden input)
+pbpaste | claude-or --key-add personal     # or pipe it in, e.g. from the clipboard
+claude-or --key-add ci sk-or-v1-...        # or as an argument (ends up in shell history)
+claude-or --key-list
+#   *  1  work      sk-or...123c
+#      2  personal  sk-or...9f0a
+#      3  ci        sk-or...77ab
+claude-or --key-switch 2                   # by index...
+claude-or --key-switch personal            # ...or by name
+claude-or --key-remove ci                  # also by index or name, several at once
+```
+
+- Keys live in `~/.config/claude-or/keys.json` (mode 600) together with the name of the active key.
+- `--key-add` checks the key against OpenRouter: a rejected key isn't saved; if OpenRouter can't be
+  reached it saves with a warning. The first key you add becomes active.
+- Names must be unique and use letters, digits, `.`, `_`, `-`, and can't be only digits, so a number
+  always means an index. Indexes are positions in the list (1, 2, 3, …): removing a key moves the
+  ones after it up.
+- Removing the active key leaves no key active until you `--key-switch` to another one.
+- The `api_key` file and `--set-key` / `--unset-key` from older versions are no longer used. If you
+  had a key there, add it again with `claude-or --key-add <name>`.
+
 The script looks for the key in this order:
 
-1. **macOS Keychain** (recommended). This command prompts for the key, so it never lands in
-   shell history:
+1. **`$OPENROUTER_API_KEY`** environment variable, e.g. for a one-off run with another key.
+2. **The active key** in `keys.json`.
+3. **macOS Keychain**. This command prompts for the key, so it never lands in shell history:
    ```bash
    security add-generic-password -a "$USER" -s openrouter-api-key -w
    ```
-2. **`$OPENROUTER_API_KEY`** environment variable.
-3. **Key file** `~/.config/claude-or/api_key`:
-   ```bash
-   claude-or --set-key                  # prompts for the key (hidden input)
-   pbpaste | claude-or --set-key        # or pipe it in, e.g. from the clipboard
-   ```
-   `--set-key` checks the key against OpenRouter (a rejected key isn't saved; if OpenRouter can't
-   be reached it saves with a warning), writes the file with mode 600, and asks before replacing a
-   key that's already there. The key is never a command argument, so it stays out of shell history.
-   `claude-or --unset-key` deletes the file. Both tell you if a Keychain entry or
-   `$OPENROUTER_API_KEY` is set, since those take precedence over the file.
-
-   By hand:
-   ```bash
-   cat > ~/.config/claude-or/api_key   # paste key, Enter, Ctrl+D
-   chmod 600 ~/.config/claude-or/api_key
-   ```
 
 GUI apps such as the Claude desktop app may not see variables exported in `~/.zshrc`. If you want
-a Claude Code session to call these commands, use the Keychain or the key file.
+a Claude Code session to call these commands, use saved keys (`--key-add`) or the Keychain.
 
 ## Aliases config file (`aliases.json`)
 

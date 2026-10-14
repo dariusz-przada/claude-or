@@ -12,18 +12,20 @@
 #   claude-or --update <alias> <property> <value>      set model, context or small of an alias
 #   claude-or --remove <alias>...                      remove alias(es), then --link
 #   claude-or --self-update                            update to the latest release tag
-#   claude-or --set-key                                save OpenRouter key to api_key (prompted)
-#   claude-or --unset-key                              delete the api_key file
+#   claude-or --key-add <name> [key]                   save a named OpenRouter key (prompted if no key)
+#   claude-or --key-remove <index|name>...             delete saved key(s)
+#   claude-or --key-list                               show saved keys (masked), * = active
+#   claude-or --key-switch <index|name>                make a saved key the active one
 #   claude-or [--help]                                 help with examples
 #
 # Config dir: ${XDG_CONFIG_HOME:-~/.config}/claude-or/
 #   aliases.json   {"defaults": {"small": "<model>"},
 #                   "aliases": {"<name>": {"model": "<id>", "context": <tokens>, "small": "<id>"}}}
 #                  "context" and "small" are optional.
-#   api_key        OpenRouter key (chmod 600)
+#   keys.json      {"active": "<name>", "keys": [{"name": "<name>", "key": "<key>"}]} (chmod 600)
 #
-# Key lookup: macOS Keychain service "openrouter-api-key", else $OPENROUTER_API_KEY,
-# else <config dir>/api_key.
+# Key lookup: $OPENROUTER_API_KEY, else the active key in keys.json, else macOS Keychain service
+# "openrouter-api-key".
 #   security add-generic-password -a "$USER" -s openrouter-api-key -w
 
 cfgdir="${XDG_CONFIG_HOME:-$HOME/.config}/claude-or"
@@ -236,77 +238,140 @@ self_update() {
   return 0
 }
 
-keyfile="$cfgdir/api_key"
+keysfile="$cfgdir/keys.json"
 
-# Prints the key sources that the lookup checks before api_key, one per line.
-other_key_sources() {
-  security find-generic-password -a "$USER" -s openrouter-api-key >/dev/null 2>&1 \
-    && print "Keychain 'openrouter-api-key'"
-  [[ -n "$OPENROUTER_API_KEY" ]] && print "\$OPENROUTER_API_KEY"
+# jq helper: shortens a key to its first 5 and last 4 characters.
+jq_mask='def mask: if length > 12 then .[0:5] + "..." + .[-4:] else "***" end;'
+
+# Applies jq filter/args "$@" to keys.json (mode 600), replacing the file only if jq succeeds.
+write_keys() {
+  local tmp
+  tmp="$(mktemp "$cfgdir/.keys.XXXXXX")" || die "can't write to $cfgdir"
+  if jq "$@" < "$keysfile" > "$tmp" && chmod 600 "$tmp"; then
+    mv "$tmp" "$keysfile"
+  else
+    rm -f "$tmp"; die "failed to update $keysfile"
+  fi
 }
 
-# Saves an OpenRouter key to api_key: prompted (hidden) or piped, never an argument, so it
-# stays out of shell history. Verified on OpenRouter; only warns if OpenRouter can't be reached.
-set_key() {
-  (( $# == 0 )) || die "usage: claude-or --set-key   (prompts for the key, or: pbpaste | claude-or --set-key)"
-  local key old code tmp src
-
-  # Ask before the new key is typed, so declining doesn't waste it. /dev/tty, not stdin,
-  # because the key itself may arrive on stdin through a pipe.
-  if [[ -s "$keyfile" ]]; then
-    old="$(<"$keyfile")"
-    { : < /dev/tty } 2>/dev/null \
-      || die "$keyfile already holds a key; run in a terminal to confirm, or claude-or --unset-key first"
-    print -u2 "warning: $keyfile already holds a key (…${old[-4,-1]})"
-    if ! read -q "?Replace it? [y/N] " < /dev/tty; then
-      print -u2; print "kept existing key"; return 0
-    fi
-    print -u2
+# Creates an empty keys.json on first use.
+need_keys() {
+  need_jq
+  if [[ ! -e "$keysfile" ]]; then
+    mkdir -p "$cfgdir" && ( umask 077; print '{ "active": null, "keys": [] }' > "$keysfile" ) \
+      || die "can't write to $cfgdir"
   fi
+  jq -e '.keys | type == "array"' "$keysfile" >/dev/null 2>&1 \
+    || die "$keysfile: invalid JSON or missing \"keys\" array"
+}
 
+# Sets kname to the name of the key given by index (1-based) or name $1; dies if there's none.
+resolve_key() {
+  kname="$(jq -r --arg r "$1" '
+    if ($r | test("^[0-9]+$")) then ($r | tonumber) as $i | if $i >= 1 then .keys[$i - 1].name // empty else empty end
+    else .keys[] | select(.name == $r) | .name end' "$keysfile")"
+  [[ -n "$kname" ]] || die "no key '$1' (see claude-or --key-list)"
+}
+
+masked_key() {
+  jq -r --arg n "$1" "$jq_mask"' .keys[] | select(.name == $n) | .key | mask' "$keysfile"
+}
+
+env_key_note() {
+  [[ -n "$OPENROUTER_API_KEY" ]] \
+    && print -u2 "note: \$OPENROUTER_API_KEY is set and takes precedence over $keysfile"
+  return 0
+}
+
+# Reads a key into $key from a hidden prompt, or from stdin when piped.
+read_secret() {
   if [[ -t 0 ]]; then
     read -rs "key?OpenRouter API key: "; print -u2
   else
     read -r key
   fi
-  key="${key//[[:space:]]/}"
-  [[ -n "$key" ]] || die "no key given, nothing saved"
+}
 
+# Checks key $1 on OpenRouter: dies if rejected, only warns if OpenRouter can't be reached.
+verify_key() {
+  local code
   code="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' \
-    -H "Authorization: Bearer $key" https://openrouter.ai/api/v1/key 2>/dev/null)"
+    -H "Authorization: Bearer $1" https://openrouter.ai/api/v1/key 2>/dev/null)"
   case "$code" in
     200) ;;
     401|403) die "OpenRouter rejected this key, not saved" ;;
     *) print -u2 "warning: couldn't verify the key on OpenRouter (HTTP ${code:-000}), saving anyway" ;;
   esac
+}
 
-  mkdir -p "$cfgdir" && tmp="$(mktemp "$cfgdir/.api_key.XXXXXX")" || die "can't write to $cfgdir"
-  if print -r -- "$key" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$keyfile"; then
-    print "saved key to $keyfile"
+# Without [key] the key is prompted (hidden) or piped, which keeps it out of shell history.
+key_add() {
+  (( $# == 1 || $# == 2 )) || die "usage: claude-or --key-add <name> [key]   (without key: prompts, or reads a pipe)"
+  local n="$1" key="$2" dup
+  need_keys
+  [[ "$n" =~ '^[A-Za-z0-9_.-]+$' && "$n" != <-> ]] \
+    || die "invalid key name '$n' (letters, digits, . _ -; not only digits, those are indexes)"
+  jq -e --arg n "$n" 'any(.keys[]; .name == $n)' "$keysfile" >/dev/null \
+    && die "key '$n' already exists (see claude-or --key-list)"
+
+  [[ -n "$key" ]] || read_secret
+  key="${key//[[:space:]]/}"
+  [[ -n "$key" ]] || die "no key given, nothing saved"
+  # The key goes to jq through the environment, not as an argument visible in ps.
+  local -x K="$key"
+  dup="$(jq -r '.keys[] | select(.key == env.K) | .name' "$keysfile")"
+  [[ -z "$dup" ]] || die "this key is already saved as '$dup'"
+  verify_key "$key"
+
+  write_keys --arg n "$n" '.keys += [{name: $n, key: env.K}] | .active //= $n'
+  if [[ "$(jq -r '.active' "$keysfile")" == "$n" ]]; then
+    print "added $n ($(masked_key "$n")), active"
   else
-    rm -f "$tmp"; die "failed to write $keyfile"
+    print "added $n ($(masked_key "$n")); to use it: claude-or --key-switch $n"
   fi
-  for src in "${(@f)$(other_key_sources)}"; do
-    [[ -n "$src" ]] && print -u2 "note: $src is set and takes precedence over $keyfile"
-  done
+  env_key_note
+}
+
+key_remove() {
+  (( $# >= 1 )) || die "usage: claude-or --key-remove <index|name>..."
+  need_keys
+  local r kname active
+  local -a names
+  # Resolve all first, so a typo removes nothing; indexes refer to the list before removal.
+  for r in "$@"; do resolve_key "$r"; names+=("$kname"); done
+  names=(${(u)names})
+  active="$(jq -r '.active // empty' "$keysfile")"
+  write_keys --args '.keys |= map(select(.name | IN($ARGS.positional[]) | not))
+    | if (.active | IN($ARGS.positional[])) then .active = null else . end' "${names[@]}"
+  for r in $names; do print "removed $r"; done
+  if [[ -n "$active" && ${names[(Ie)$active]} -gt 0 ]]; then
+    print -u2 "note: '$active' was the active key; pick another: claude-or --key-switch <index|name>"
+  fi
   return 0
 }
 
-unset_key() {
-  (( $# == 0 )) || die "usage: claude-or --unset-key"
-  local src
-  if [[ -e "$keyfile" ]]; then
-    rm -f "$keyfile" && print "removed $keyfile" || die "can't remove $keyfile"
-  else
-    print "no key file to remove"
+key_list() {
+  (( $# == 0 )) || die "usage: claude-or --key-list"
+  need_keys
+  if ! jq -e '.keys | length > 0' "$keysfile" >/dev/null; then
+    print "no keys yet: claude-or --key-add <name>"; return 0
   fi
-  for src in "${(@f)$(other_key_sources)}"; do
-    [[ -n "$src" ]] || continue
-    print -u2 "note: $src is still set and will be used"
-    [[ "$src" == Keychain* ]] && print -u2 \
-      "  to remove it: security delete-generic-password -a \"\$USER\" -s openrouter-api-key"
-  done
-  return 0
+  jq -r "$jq_mask"' .active as $a | .keys | to_entries[]
+    | [(if .value.name == $a then "*" else "" end), (.key + 1 | tostring), .value.name, (.value.key | mask)]
+    | @tsv' "$keysfile" | awk -F'\t' '{ printf "%1s %2s  %s\t%s\n", $1, $2, $3, $4 }' | column -t -s $'\t'
+  jq -e '.active as $a | any(.keys[]; .name == $a)' "$keysfile" >/dev/null \
+    || print -u2 "note: no active key; pick one: claude-or --key-switch <index|name>"
+  env_key_note
+}
+
+key_switch() {
+  (( $# == 1 )) || die "usage: claude-or --key-switch <index|name>"
+  local kname
+  need_keys
+  resolve_key "$1"
+  write_keys --arg n "$kname" '.active = $n'
+  print "active key: $kname ($(masked_key "$kname"))"
+  env_key_note
 }
 
 show_help() {
@@ -330,9 +395,12 @@ Commands:
   claude-or --unlink                            remove all alias symlinks; aliases.json is kept,
                                                 so claude-or <alias> still works
   claude-or --self-update                       update to the latest release tag (aliases.json kept)
-  claude-or --set-key                           verify and save the OpenRouter key to api_key
-                                                (hidden prompt, or piped: pbpaste | claude-or --set-key)
-  claude-or --unset-key                         delete the api_key file
+  claude-or --key-add <name> [key]              verify and save a named OpenRouter key; the first one
+                                                becomes active. Without [key]: hidden prompt, or piped
+                                                (pbpaste | claude-or --key-add work), out of shell history
+  claude-or --key-remove <index|name>...        delete saved key(s)
+  claude-or --key-list                          show saved keys: * active, index, name, masked key
+  claude-or --key-switch <index|name>           make a saved key the active one
   claude-or --help                             this help
 
 Examples:
@@ -348,7 +416,8 @@ Examples:
 
 Config: $cfgdir/
   aliases.json  alias definitions (edit by hand, then run claude-or --link)
-  api_key       OpenRouter key; or Keychain service "openrouter-api-key"; or \$OPENROUTER_API_KEY
+  keys.json     saved OpenRouter keys and the active one (managed with --key-*)
+Key lookup: \$OPENROUTER_API_KEY, active key in keys.json, Keychain "openrouter-api-key"
 Overrides: OR_CONTEXT (context window), OR_SMALL_MODEL (background model)
 EOF
   if ! whence -p jq >/dev/null; then
@@ -371,8 +440,12 @@ case "$name" in
       --update) shift; update_alias "$@"; exit ;;
       --remove) shift; remove_alias "$@"; exit ;;
       --self-update) self_update; exit ;;
-      --set-key)   shift; set_key "$@"; exit ;;
-      --unset-key) shift; unset_key "$@"; exit ;;
+      --key-add)    shift; key_add "$@"; exit ;;
+      --key-remove) shift; key_remove "$@"; exit ;;
+      --key-list)   shift; key_list "$@"; exit ;;
+      --key-switch) shift; key_switch "$@"; exit ;;
+      --set-key|--unset-key)
+        die "$1 was replaced by the key manager: --key-add, --key-remove, --key-list, --key-switch" ;;
       ""|-h|--help) show_help; exit ;;
       -*)       die "unknown option '$1' (see claude-or --help)" ;;
     esac
@@ -395,10 +468,12 @@ esac
 ctx="${OR_CONTEXT:-$ctx}"
 small="${OR_SMALL_MODEL:-${small:-$model}}"
 
-key="$(security find-generic-password -a "$USER" -s openrouter-api-key -w 2>/dev/null)"
-[[ -z "$key" ]] && key="$OPENROUTER_API_KEY"
-[[ -z "$key" && -r "$cfgdir/api_key" ]] && key="$(<"$cfgdir/api_key")"
-[[ -n "$key" ]] || die "no OpenRouter key (Keychain 'openrouter-api-key', \$OPENROUTER_API_KEY or $cfgdir/api_key)"
+key="$OPENROUTER_API_KEY"
+[[ -z "$key" && -r "$keysfile" ]] && whence -p jq >/dev/null \
+  && key="$(jq -r '.active as $a | .keys[]? | select(.name == $a) | .key' "$keysfile" 2>/dev/null)"
+[[ -z "$key" ]] && key="$(security find-generic-password -a "$USER" -s openrouter-api-key -w 2>/dev/null)"
+[[ -n "$key" ]] || die "no OpenRouter key: claude-or --key-add <name> (or --key-switch if keys are saved;
+or \$OPENROUTER_API_KEY, or Keychain 'openrouter-api-key')"
 
 # Every model tier in /model (Fable, Opus, Sonnet, Haiku) points at OpenRouter models: a tier left
 # unset keeps its Claude default and OpenRouter would bill it at Anthropic prices.
