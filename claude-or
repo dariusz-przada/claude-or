@@ -6,17 +6,17 @@
 #   claude-or <alias> [claude args...]                 alias from aliases.json
 #   <alias> [claude args...]                           via symlink named like the alias
 #   claude-or --list                                   show aliases
-#   claude-or --link                                   sync symlinks with aliases.json
-#   claude-or --unlink                                 remove all alias symlinks (aliases.json kept)
 #   claude-or --add <alias> <model-id> [context]       add alias to aliases.json, then --link
 #   claude-or --update <alias> <property> <value>      set model, context or small of an alias
 #   claude-or --remove <alias>...                      remove alias(es), then --link
-#   claude-or --self-update                            update to the latest release tag
+#   claude-or --link                                   sync symlinks with aliases.json
+#   claude-or --unlink                                 remove all alias symlinks (aliases.json kept)
 #   claude-or --key-add <name> [key]                   save a named OpenRouter key (prompted if no key)
 #   claude-or --key-remove <index|name>...             delete saved key(s)
 #   claude-or --key-list                               show saved keys (masked), * = active
 #   claude-or --key-switch <index|name>                make a saved key the active one
-#   claude-or --self-factory-reset                     delete keys.json, aliases.json and alias symlinks
+#   claude-or --self-update                            update to the latest release tag
+#   claude-or --self-factory-reset                     delete keys and aliases, restore default aliases
 #   claude-or --self-uninstall                         also delete the config dir and this script
 #   claude-or [--help]                                 help with examples
 #
@@ -33,6 +33,7 @@
 cfgdir="${XDG_CONFIG_HOME:-$HOME/.config}/claude-or"
 aliasfile="$cfgdir/aliases.json"
 self="${0:A}"   # real script path (symlinks resolved)
+repo=dariusz-przada/claude-or
 name="${0:t}"
 
 die() { print -u2 "${name}: $*"; exit 1; }
@@ -213,7 +214,7 @@ remove_alias() {
 # Replaces this script with the one from the newest version tag on GitHub; aliases.json is kept.
 self_update() {
   setopt localoptions extendedglob
-  local repo=dariusz-przada/claude-or tag tmp
+  local tag tmp
   local -a tags
   tags=(${(f)"$(curl -fsS -m 20 "https://api.github.com/repos/$repo/tags?per_page=100" 2>/dev/null \
     | sed -n 's/.*"name": *"\([^"]*\)".*/\1/p')"})
@@ -409,18 +410,28 @@ kept_key_notes() {
   return 0
 }
 
-# Deletes keys.json, aliases.json and the alias symlinks after a confirmation; the script stays.
+# Deletes keys.json, aliases.json and the alias symlinks after a confirmation, then puts back the
+# default aliases.json from GitHub and links it; the script stays.
 self_factory_reset() {
   (( $# == 0 )) || die "usage: claude-or --self-factory-reset"
-  local f
+  local f defaults
   local -a files
+  need_jq
+  # Fetch the defaults first, so a failed download leaves everything as it was.
+  defaults="$(curl -fsSL -m 20 "https://raw.githubusercontent.com/$repo/main/aliases.json" 2>/dev/null)"
+  jq -e '.aliases | type == "object"' <<< "$defaults" >/dev/null 2>&1 \
+    || die "couldn't download the default aliases.json from github.com/$repo, nothing deleted"
+
   for f in "$keysfile" "$aliasfile"; do [[ -e "$f" ]] && files+=("$f"); done
   files+=(${(f)"$(alias_links)"})
-  if (( ! $#files )); then
-    print "nothing to reset"; return 0
+  if (( $#files )); then
+    print "factory reset: deletes the files below, then restores the default aliases.json and its symlinks"
+    confirm_delete $files || return 0
   fi
-  confirm_delete $files && kept_key_notes
-  return 0
+  mkdir -p "$cfgdir" && print -r -- "$defaults" > "$aliasfile" || die "can't write $aliasfile"
+  print "restored default $aliasfile"
+  link_aliases
+  kept_key_notes
 }
 
 # Deletes the alias symlinks, the whole config dir and this script after a confirmation.
@@ -445,7 +456,7 @@ Usage:
   claude-or <alias> [claude args...]            same, without needing the symlink
   claude-or <model-id> [claude args...]         any OpenRouter model, no alias needed
 
-Commands:
+Aliases:
   claude-or --list                              show aliases (name, model, context, background model)
   claude-or --add <alias> <model-id> [context]  validate and add an alias, then --link
                                                 (context defaults to the model's window on OpenRouter)
@@ -456,18 +467,22 @@ Commands:
   claude-or --link                              sync symlinks with aliases.json
   claude-or --unlink                            remove all alias symlinks; aliases.json is kept,
                                                 so claude-or <alias> still works
-  claude-or --self-update                       update to the latest release tag (aliases.json kept)
+
+OpenRouter keys:
   claude-or --key-add <name> [key]              verify and save a named OpenRouter key; the first one
                                                 becomes active. Without [key]: hidden prompt, or piped
                                                 (pbpaste | claude-or --key-add work), out of shell history
   claude-or --key-remove <index|name>...        delete saved key(s)
   claude-or --key-list                          show saved keys: * active, index, name, masked key
   claude-or --key-switch <index|name>           make a saved key the active one
-  claude-or --self-factory-reset                delete keys.json, aliases.json and alias symlinks
-                                                (asks first; the script itself stays)
+
+claude-or itself:
+  claude-or --self-update                       update to the latest release tag (aliases.json kept)
+  claude-or --self-factory-reset                delete keys.json, aliases.json and alias symlinks,
+                                                then restore the default aliases (asks first)
   claude-or --self-uninstall                    delete alias symlinks, the config dir and claude-or
                                                 itself (asks first)
-  claude-or --help                             this help
+  claude-or --help                              this help
 
 Examples:
   ccds                                          interactive session on DeepSeek V4 Pro
@@ -505,15 +520,15 @@ case "$name" in
       --add)    shift; add_alias "$@"; exit ;;
       --update) shift; update_alias "$@"; exit ;;
       --remove) shift; remove_alias "$@"; exit ;;
-      --self-update) self_update; exit ;;
       --key-add)    shift; key_add "$@"; exit ;;
       --key-remove) shift; key_remove "$@"; exit ;;
       --key-list)   shift; key_list "$@"; exit ;;
       --key-switch) shift; key_switch "$@"; exit ;;
-      --self-factory-reset) shift; self_factory_reset "$@"; exit ;;
-      --self-uninstall)     shift; self_uninstall "$@"; exit ;;
       --set-key|--unset-key)
         die "$1 was replaced by the key manager: --key-add, --key-remove, --key-list, --key-switch" ;;
+      --self-update)        self_update; exit ;;
+      --self-factory-reset) shift; self_factory_reset "$@"; exit ;;
+      --self-uninstall)     shift; self_uninstall "$@"; exit ;;
       ""|-h|--help) show_help; exit ;;
       -*)       die "unknown option '$1' (see claude-or --help)" ;;
     esac

@@ -71,20 +71,24 @@ Every command passes the rest of its arguments straight to `claude`, for example
 
 | Command | What it does |
 |---|---|
+| **Run** | |
 | `claude-or <alias> [args]` | Run an alias without needing its symlink |
 | `claude-or <model-id> [args]` | Run any OpenRouter model once, no alias needed (model ids are always `vendor/model`) |
+| **Aliases** | |
 | `claude-or --list` | Show aliases: name, model, context, background model |
-| `claude-or --link` | Sync symlinks with `aliases.json` (create new, remove deleted) |
-| `claude-or --unlink` | Remove all alias symlinks, keeping `aliases.json` |
 | `claude-or --add <alias> <model-id> [context]` | Validate and add an alias to `aliases.json`, then `--link` |
 | `claude-or --update <alias> <property> <value>` | Validate and set an alias's `model`, `small` or `context` |
 | `claude-or --remove <alias>...` | Remove alias(es) from `aliases.json` and their symlinks |
-| `claude-or --self-update` | Replace the installed script with the latest release tag from GitHub, keeping `aliases.json` |
+| `claude-or --link` | Sync symlinks with `aliases.json` (create new, remove deleted) |
+| `claude-or --unlink` | Remove all alias symlinks, keeping `aliases.json` |
+| **OpenRouter keys** | |
 | `claude-or --key-add <name> [key]` | Verify an OpenRouter key and save it under a name; without `[key]` it's read from a hidden prompt or a pipe |
 | `claude-or --key-remove <index\|name>...` | Delete saved key(s) |
 | `claude-or --key-list` | Show saved keys: active (`*`), index, name, masked key |
 | `claude-or --key-switch <index\|name>` | Make a saved key the active one |
-| `claude-or --self-factory-reset` | Delete `keys.json`, `aliases.json` and all alias symlinks, after a `[y/N]` confirmation. The script itself, a Keychain entry and `$OPENROUTER_API_KEY` stay |
+| **claude-or itself** | |
+| `claude-or --self-update` | Replace the installed script with the latest release tag from GitHub, keeping `aliases.json` |
+| `claude-or --self-factory-reset` | Delete `keys.json`, `aliases.json` and all alias symlinks, after a `[y/N]` confirmation, then restore the default `aliases.json` from GitHub and link it. The script itself, a Keychain entry and `$OPENROUTER_API_KEY` stay |
 | `claude-or --self-uninstall` | Remove claude-or completely: all alias symlinks, the config dir `~/.config/claude-or/` (aliases, keys) and the `claude-or` script itself, after a `[y/N]` confirmation. A Keychain entry and `$OPENROUTER_API_KEY` stay |
 | `claude-or`, `claude-or --help` | Help with all commands, examples and your current aliases |
 
@@ -105,9 +109,10 @@ Install by copying the script, as above, not by symlinking it from a clone of th
 `claude-or` creates the alias symlinks next to its real path, so with a symlinked install they
 would end up in the clone instead of `~/.local/bin`.
 
-To start over with an empty config, run `claude-or --self-factory-reset` (deletes `keys.json`,
-`aliases.json` and the alias symlinks, keeps the script). To remove everything, including the
-script itself, run `claude-or --self-uninstall`. Both list what they'll delete and ask first.
+To start over, run `claude-or --self-factory-reset`: it deletes `keys.json`, `aliases.json` and the
+alias symlinks, then downloads the default `aliases.json` and links it again. The script stays. To
+remove everything, including the script itself, run `claude-or --self-uninstall`. Both list what
+they'll delete and ask first.
 
 ## Files
 
