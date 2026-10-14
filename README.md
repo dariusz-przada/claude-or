@@ -79,6 +79,8 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --update <alias> <property> <value>` | Validate and set an alias's `model`, `small` or `context` |
 | `claude-or --remove <alias>...` | Remove alias(es) from `aliases.json` and their symlinks |
 | `claude-or --self-update` | Replace the installed script with the latest release tag from GitHub, keeping `aliases.json` |
+| `claude-or --set-key` | Verify an OpenRouter key and save it to `api_key` (hidden prompt or pipe; asks before replacing an existing key) |
+| `claude-or --unset-key` | Delete the `api_key` file |
 | `claude-or`, `claude-or --help` | Help with all commands, examples and your current aliases |
 
 ## Install
@@ -118,6 +120,17 @@ The script looks for the key in this order:
    ```
 2. **`$OPENROUTER_API_KEY`** environment variable.
 3. **Key file** `~/.config/claude-or/api_key`:
+   ```bash
+   claude-or --set-key                  # prompts for the key (hidden input)
+   pbpaste | claude-or --set-key        # or pipe it in, e.g. from the clipboard
+   ```
+   `--set-key` checks the key against OpenRouter (a rejected key isn't saved; if OpenRouter can't
+   be reached it saves with a warning), writes the file with mode 600, and asks before replacing a
+   key that's already there. The key is never a command argument, so it stays out of shell history.
+   `claude-or --unset-key` deletes the file. Both tell you if a Keychain entry or
+   `$OPENROUTER_API_KEY` is set, since those take precedence over the file.
+
+   By hand:
    ```bash
    cat > ~/.config/claude-or/api_key   # paste key, Enter, Ctrl+D
    chmod 600 ~/.config/claude-or/api_key

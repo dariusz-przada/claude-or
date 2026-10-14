@@ -12,6 +12,8 @@
 #   claude-or --update <alias> <property> <value>      set model, context or small of an alias
 #   claude-or --remove <alias>...                      remove alias(es), then --link
 #   claude-or --self-update                            update to the latest release tag
+#   claude-or --set-key                                save OpenRouter key to api_key (prompted)
+#   claude-or --unset-key                              delete the api_key file
 #   claude-or [--help]                                 help with examples
 #
 # Config dir: ${XDG_CONFIG_HOME:-~/.config}/claude-or/
@@ -234,6 +236,79 @@ self_update() {
   return 0
 }
 
+keyfile="$cfgdir/api_key"
+
+# Prints the key sources that the lookup checks before api_key, one per line.
+other_key_sources() {
+  security find-generic-password -a "$USER" -s openrouter-api-key >/dev/null 2>&1 \
+    && print "Keychain 'openrouter-api-key'"
+  [[ -n "$OPENROUTER_API_KEY" ]] && print "\$OPENROUTER_API_KEY"
+}
+
+# Saves an OpenRouter key to api_key: prompted (hidden) or piped, never an argument, so it
+# stays out of shell history. Verified on OpenRouter; only warns if OpenRouter can't be reached.
+set_key() {
+  (( $# == 0 )) || die "usage: claude-or --set-key   (prompts for the key, or: pbpaste | claude-or --set-key)"
+  local key old code tmp src
+
+  # Ask before the new key is typed, so declining doesn't waste it. /dev/tty, not stdin,
+  # because the key itself may arrive on stdin through a pipe.
+  if [[ -s "$keyfile" ]]; then
+    old="$(<"$keyfile")"
+    { : < /dev/tty } 2>/dev/null \
+      || die "$keyfile already holds a key; run in a terminal to confirm, or claude-or --unset-key first"
+    print -u2 "warning: $keyfile already holds a key (…${old[-4,-1]})"
+    if ! read -q "?Replace it? [y/N] " < /dev/tty; then
+      print -u2; print "kept existing key"; return 0
+    fi
+    print -u2
+  fi
+
+  if [[ -t 0 ]]; then
+    read -rs "key?OpenRouter API key: "; print -u2
+  else
+    read -r key
+  fi
+  key="${key//[[:space:]]/}"
+  [[ -n "$key" ]] || die "no key given, nothing saved"
+
+  code="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $key" https://openrouter.ai/api/v1/key 2>/dev/null)"
+  case "$code" in
+    200) ;;
+    401|403) die "OpenRouter rejected this key, not saved" ;;
+    *) print -u2 "warning: couldn't verify the key on OpenRouter (HTTP ${code:-000}), saving anyway" ;;
+  esac
+
+  mkdir -p "$cfgdir" && tmp="$(mktemp "$cfgdir/.api_key.XXXXXX")" || die "can't write to $cfgdir"
+  if print -r -- "$key" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$keyfile"; then
+    print "saved key to $keyfile"
+  else
+    rm -f "$tmp"; die "failed to write $keyfile"
+  fi
+  for src in "${(@f)$(other_key_sources)}"; do
+    [[ -n "$src" ]] && print -u2 "note: $src is set and takes precedence over $keyfile"
+  done
+  return 0
+}
+
+unset_key() {
+  (( $# == 0 )) || die "usage: claude-or --unset-key"
+  local src
+  if [[ -e "$keyfile" ]]; then
+    rm -f "$keyfile" && print "removed $keyfile" || die "can't remove $keyfile"
+  else
+    print "no key file to remove"
+  fi
+  for src in "${(@f)$(other_key_sources)}"; do
+    [[ -n "$src" ]] || continue
+    print -u2 "note: $src is still set and will be used"
+    [[ "$src" == Keychain* ]] && print -u2 \
+      "  to remove it: security delete-generic-password -a \"\$USER\" -s openrouter-api-key"
+  done
+  return 0
+}
+
 show_help() {
   cat <<EOF
 claude-or: run Claude Code against OpenRouter models (DeepSeek, Kimi, GLM, Qwen, ...)
@@ -255,6 +330,9 @@ Commands:
   claude-or --unlink                            remove all alias symlinks; aliases.json is kept,
                                                 so claude-or <alias> still works
   claude-or --self-update                       update to the latest release tag (aliases.json kept)
+  claude-or --set-key                           verify and save the OpenRouter key to api_key
+                                                (hidden prompt, or piped: pbpaste | claude-or --set-key)
+  claude-or --unset-key                         delete the api_key file
   claude-or --help                             this help
 
 Examples:
@@ -293,6 +371,8 @@ case "$name" in
       --update) shift; update_alias "$@"; exit ;;
       --remove) shift; remove_alias "$@"; exit ;;
       --self-update) self_update; exit ;;
+      --set-key)   shift; set_key "$@"; exit ;;
+      --unset-key) shift; unset_key "$@"; exit ;;
       ""|-h|--help) show_help; exit ;;
       -*)       die "unknown option '$1' (see claude-or --help)" ;;
     esac
