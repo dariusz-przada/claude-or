@@ -16,7 +16,8 @@
 #   claude-or --key-remove <index|name>...             delete saved key(s)
 #   claude-or --key-list                               show saved keys (masked), * = active
 #   claude-or --key-switch <index|name>                make a saved key the active one
-#   claude-or --factory-reset                          delete keys.json, aliases.json and alias symlinks
+#   claude-or --self-factory-reset                     delete keys.json, aliases.json and alias symlinks
+#   claude-or --self-uninstall                         also delete the config dir and this script
 #   claude-or [--help]                                 help with examples
 #
 # Config dir: ${XDG_CONFIG_HOME:-~/.config}/claude-or/
@@ -375,35 +376,64 @@ key_switch() {
   env_key_note
 }
 
-# Deletes keys.json, aliases.json and the alias symlinks after a confirmation; the script stays.
-factory_reset() {
-  (( $# == 0 )) || die "usage: claude-or --factory-reset"
-  local f target
-  local -a files
-  for f in "$keysfile" "$aliasfile"; do [[ -e "$f" ]] && files+=("$f"); done
+# Prints the symlinks next to the script that point to it, one per line.
+alias_links() {
+  local target
   for target in "${self:h}"/*(N@); do
-    [[ "$(readlink "$target")" == claude-or ]] && files+=("$target")
+    [[ "$(readlink "$target")" == claude-or ]] && print -r -- "$target"
   done
-  if (( ! $#files )); then
-    print "nothing to reset"; return 0
-  fi
+  return 0
+}
 
+# Lists paths $@, asks [y/N] on the terminal and deletes them on yes; returns 1 if declined.
+confirm_delete() {
+  local f
   print "this deletes:"
-  for f in $files; do print "  $f"; done
+  for f in "$@"; do print "  $f"; done
   { : < /dev/tty } 2>/dev/null || die "run in a terminal to confirm, nothing deleted"
   if ! read -q "?Continue? [y/N] " < /dev/tty; then
-    print; print "nothing deleted"; return 0
+    print; print "nothing deleted"; return 1
   fi
   print
-  for f in $files; do
-    rm -f "$f" && print "removed $f" || print -u2 "can't remove $f"
+  for f in "$@"; do
+    rm -rf -- "$f" && print "removed $f" || print -u2 "can't remove $f"
   done
+}
 
+# Key sources outside claude-or's files, which a reset or uninstall leaves alone.
+kept_key_notes() {
   security find-generic-password -a "$USER" -s openrouter-api-key >/dev/null 2>&1 \
     && print -u2 "note: Keychain 'openrouter-api-key' is kept; to remove it:" \
       "security delete-generic-password -a \"\$USER\" -s openrouter-api-key"
   [[ -n "$OPENROUTER_API_KEY" ]] && print -u2 "note: \$OPENROUTER_API_KEY is still set in your environment"
   return 0
+}
+
+# Deletes keys.json, aliases.json and the alias symlinks after a confirmation; the script stays.
+self_factory_reset() {
+  (( $# == 0 )) || die "usage: claude-or --self-factory-reset"
+  local f
+  local -a files
+  for f in "$keysfile" "$aliasfile"; do [[ -e "$f" ]] && files+=("$f"); done
+  files+=(${(f)"$(alias_links)"})
+  if (( ! $#files )); then
+    print "nothing to reset"; return 0
+  fi
+  confirm_delete $files && kept_key_notes
+  return 0
+}
+
+# Deletes the alias symlinks, the whole config dir and this script after a confirmation.
+self_uninstall() {
+  (( $# == 0 )) || die "usage: claude-or --self-uninstall"
+  local -a files
+  files=(${(f)"$(alias_links)"})
+  # cfgdir always ends in /claude-or, so this never removes a shared config dir.
+  [[ -e "$cfgdir" && "${cfgdir:t}" == claude-or ]] && files+=("$cfgdir")
+  files+=("$self")
+  confirm_delete $files || return 0
+  kept_key_notes
+  print "claude-or is uninstalled"
 }
 
 show_help() {
@@ -433,8 +463,10 @@ Commands:
   claude-or --key-remove <index|name>...        delete saved key(s)
   claude-or --key-list                          show saved keys: * active, index, name, masked key
   claude-or --key-switch <index|name>           make a saved key the active one
-  claude-or --factory-reset                     delete keys.json, aliases.json and alias symlinks
+  claude-or --self-factory-reset                delete keys.json, aliases.json and alias symlinks
                                                 (asks first; the script itself stays)
+  claude-or --self-uninstall                    delete alias symlinks, the config dir and claude-or
+                                                itself (asks first)
   claude-or --help                             this help
 
 Examples:
@@ -478,7 +510,8 @@ case "$name" in
       --key-remove) shift; key_remove "$@"; exit ;;
       --key-list)   shift; key_list "$@"; exit ;;
       --key-switch) shift; key_switch "$@"; exit ;;
-      --factory-reset) shift; factory_reset "$@"; exit ;;
+      --self-factory-reset) shift; self_factory_reset "$@"; exit ;;
+      --self-uninstall)     shift; self_uninstall "$@"; exit ;;
       --set-key|--unset-key)
         die "$1 was replaced by the key manager: --key-add, --key-remove, --key-list, --key-switch" ;;
       ""|-h|--help) show_help; exit ;;

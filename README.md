@@ -84,7 +84,8 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --key-remove <index\|name>...` | Delete saved key(s) |
 | `claude-or --key-list` | Show saved keys: active (`*`), index, name, masked key |
 | `claude-or --key-switch <index\|name>` | Make a saved key the active one |
-| `claude-or --factory-reset` | Delete `keys.json`, `aliases.json` and all alias symlinks, after a `[y/N]` confirmation. The script itself, a Keychain entry and `$OPENROUTER_API_KEY` stay |
+| `claude-or --self-factory-reset` | Delete `keys.json`, `aliases.json` and all alias symlinks, after a `[y/N]` confirmation. The script itself, a Keychain entry and `$OPENROUTER_API_KEY` stay |
+| `claude-or --self-uninstall` | Remove claude-or completely: all alias symlinks, the config dir `~/.config/claude-or/` (aliases, keys) and the `claude-or` script itself, after a `[y/N]` confirmation. A Keychain entry and `$OPENROUTER_API_KEY` stay |
 | `claude-or`, `claude-or --help` | Help with all commands, examples and your current aliases |
 
 ## Install
@@ -103,6 +104,10 @@ commands again): it replaces the script with the latest release tag but keeps yo
 Install by copying the script, as above, not by symlinking it from a clone of this repo.
 `claude-or` creates the alias symlinks next to its real path, so with a symlinked install they
 would end up in the clone instead of `~/.local/bin`.
+
+To start over with an empty config, run `claude-or --self-factory-reset` (deletes `keys.json`,
+`aliases.json` and the alias symlinks, keeps the script). To remove everything, including the
+script itself, run `claude-or --self-uninstall`. Both list what they'll delete and ask first.
 
 ## Files
 
