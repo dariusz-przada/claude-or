@@ -84,6 +84,7 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --key-remove <index\|name>...` | Delete saved key(s) |
 | `claude-or --key-list` | Show saved keys: active (`*`), index, name, masked key |
 | `claude-or --key-switch <index\|name>` | Make a saved key the active one |
+| `claude-or --factory-reset` | Delete `keys.json`, `aliases.json` and all alias symlinks, after a `[y/N]` confirmation. The script itself, a Keychain entry and `$OPENROUTER_API_KEY` stay |
 | `claude-or`, `claude-or --help` | Help with all commands, examples and your current aliases |
 
 ## Install
