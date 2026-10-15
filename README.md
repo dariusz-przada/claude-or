@@ -37,7 +37,7 @@ Anthropic-compatible endpoint, using short commands that you define yourself, fo
 
 ## Requirements: `jq`
 
-Aliases (`aliases.json`, `--add`, `--update`, `--remove`, `--list`, `--link`) and the
+Aliases (`aliases.json`, `--add`, `--update`, `--remove`, `--list`, `--sync`, `--link`, `--unlink`) and the
 [key manager](#api-key) (`--key-*`) need [`jq`](https://jqlang.org).
 
 - **macOS 15+**: built in (`/usr/bin/jq`).
@@ -45,7 +45,7 @@ Aliases (`aliases.json`, `--add`, `--update`, `--remove`, `--list`, `--link`) an
 - **Linux**: `sudo apt install jq` (or `dnf` / `pacman` / `apk install jq`)
 
 Check with `jq --version`. Without `jq`, alias commands stop with an install hint, but you can still
-run any model directly. That path doesn't need `jq`, and neither does `--unlink`:
+run any model directly. That path doesn't need `jq`:
 
 ```bash
 claude-or deepseek/deepseek-v4-pro
@@ -75,12 +75,13 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or <alias> [args]` | Run an alias without needing its symlink |
 | `claude-or <model-id> [args]` | Run any OpenRouter model once, no alias needed (model ids are always `vendor/model`) |
 | **Aliases** | |
-| `claude-or --list` | Show aliases: name, model, context, background model |
-| `claude-or --add <alias> <model-id> [context]` | Validate and add an alias to `aliases.json`, then `--link` |
+| `claude-or --list` | Show aliases: name, model, context, background model, link (`on`/`off`) |
+| `claude-or --add <alias> <model-id> [context]` | Validate and add an alias to `aliases.json`, then link it |
 | `claude-or --update <alias> <property> <value>` | Validate and set an alias's `model`, `small` or `context` |
 | `claude-or --remove <alias>...` | Remove alias(es) from `aliases.json` and their symlinks |
-| `claude-or --link` | Sync symlinks with `aliases.json` (create new, remove deleted) and show the status of each alias, with the reason when it can't be linked |
-| `claude-or --unlink` | Remove all alias symlinks, keeping `aliases.json` |
+| `claude-or --sync` | Link every alias as `aliases.json` says (turned-off ones stay unlinked), remove symlinks of deleted aliases, and show the status of each alias, with the reason when it can't be linked |
+| `claude-or --link [-y] [alias...]` | Turn the named aliases on and link them. With no names: all of them, after a `[y/N]` prompt (`-y` skips it) |
+| `claude-or --unlink [-y] [alias...]` | Turn the named aliases off and remove their symlinks; `aliases.json` keeps them, so `claude-or <alias>` still works. With no names: all of them, after a `[y/N]` prompt |
 | **OpenRouter keys** | |
 | `claude-or --key-add <name> [key]` | Verify an OpenRouter key and save it under a name; without `[key]` it's read from a hidden prompt or a pipe |
 | `claude-or --key-remove <index\|name>...` | Delete saved key(s) |
@@ -101,7 +102,7 @@ R=https://raw.githubusercontent.com/dariusz-przada/claude-or/main
 mkdir -p ~/.local/bin ~/.config/claude-or
 curl -fsSL "$R/claude-or" -o ~/.local/bin/claude-or && chmod +x ~/.local/bin/claude-or
 [ -f ~/.config/claude-or/aliases.json ] || curl -fsSL "$R/aliases.json" -o ~/.config/claude-or/aliases.json
-~/.local/bin/claude-or --link
+~/.local/bin/claude-or --sync
 ```
 
 Make sure `~/.local/bin` is in your `PATH`. To update, run `claude-or --self-update` (or the same
@@ -202,6 +203,7 @@ a Claude Code session to call these commands, use saved keys (`--key-add`) or th
 | `model` | yes | OpenRouter model id |
 | `context` | no | Context window in tokens. Without it, Claude Code assumes 200k for unknown models. |
 | `small` | no | Model for Claude Code's "haiku"/background calls. Falls back to `defaults.small`, then to `model`. |
+| `link` | no | `false` when the alias was turned off with `--unlink`: no symlink, but `claude-or <alias>` works. Removed by `--link <alias>`. |
 | `defaults.small` | no | Background model for every alias that doesn't set its own |
 
 Environment overrides for a single run:
@@ -232,8 +234,8 @@ Before writing anything, `--add` checks that:
 - the model exists on OpenRouter. It warns if the model doesn't list tool support. If OpenRouter
   can't be reached, it adds the alias anyway with a warning.
 
-Then it writes the entry, filling in `context` from OpenRouter if you didn't give one, and runs
-`--link` to create the symlink. If `aliases.json` doesn't exist yet, `--add` creates it.
+Then it writes the entry, filling in `context` from OpenRouter if you didn't give one, and
+links it. If `aliases.json` doesn't exist yet, `--add` creates it.
 
 To find model ids and context windows, browse [openrouter.ai/models](https://openrouter.ai/models)
 or query the API:
@@ -253,21 +255,23 @@ existing alias, [`--update`](#change-an-alias) is simpler.
    "ccluna": { "model": "openai/gpt-6-luna", "context": 1050000, "small": "openai/gpt-6-luna" }
    ```
 
-2. **Create the symlink.** Either sync all of them:
+2. **Create the symlink.** Either link just this alias, or sync all of them:
    ```bash
-   claude-or --link
+   claude-or --link ccluna
+   claude-or --sync
    ```
    or add just this one:
    ```bash
    ln -s claude-or ~/.local/bin/ccluna
    ```
-   `--link` refuses a name that already exists as another command, so an alias can't shadow a
+   `--link` and `--sync` refuse a name that already exists as another command, so an alias can't shadow a
    real tool. If you create the symlink yourself, check first with `command -v ccluna`.
 
-   `--link` prints one line per alias:
+   `--sync` (and `--link`) print one line per alias:
    ```
    linked    ccluna       ~/.local/bin/ccluna
    ok        ccds         already linked
+   off       ccfree       turned off with --unlink; claude-or --link ccfree to turn on
    skipped   git          another 'git' is already installed: /usr/bin/git
    unlinked  ccx          another 'ccx' is already installed: /opt/homebrew/bin/ccx
    removed   ccold        no longer in aliases.json
@@ -276,7 +280,9 @@ existing alias, [`--update`](#change-an-alias) is simpler.
      a shell builtin, an invalid name, or a file that isn't a claude-or symlink.
    - `unlinked`: the alias was linked, but a command with the same name was installed later. The
      old symlink is removed so it doesn't hide that command.
-   - Aliases without a symlink still run as `claude-or <alias>`. `--link` exits with status 1 when
+   - `off`: turned off with `--unlink`, so `--sync`, `--add`, `--remove` and `--self-update` don't
+     link it.
+   - Aliases without a symlink still run as `claude-or <alias>`. `--sync` exits with status 1 when
      there are any, and warns if the symlinks' directory isn't in your `PATH`.
    - Only symlinks that point to `claude-or` are ever created or removed. Files and links that
      belong to anything else are left alone.
@@ -322,32 +328,34 @@ claude-or --remove ccluna ccqwen   # several
 
 It first checks that every name exists in `aliases.json`, so a typo leaves it untouched and a
 name that isn't an alias (`claude-or --remove ls`) is refused. Then it removes
-the entries and runs `--link`, which deletes the matching symlinks.
+the entries and deletes the matching symlinks.
 
-By hand: delete the entry from `aliases.json` and run `claude-or --link`.
+By hand: delete the entry from `aliases.json` and run `claude-or --sync`.
 
 `--add`, `--update` and `--remove` rewrite `aliases.json` with `jq`, so one-line entries come back expanded
 to several lines. The content stays the same.
 
 ## Use only `claude-or`, without alias commands
 
-If you'd rather not have `ccds` and the others in your `PATH`:
+If you'd rather not have `ccds` and the others in your `PATH`, turn them off. Name the ones to
+drop, or give no names to drop all of them (it asks first, `-y` skips the question):
 
 ```bash
-claude-or --unlink
+claude-or --unlink ccfree ccglm    # just these
+claude-or --unlink                 # all: "This removes the symlinks of all 6 aliases ... [y/N]"
 ```
 
-It deletes every symlink that points to `claude-or` and leaves `aliases.json` alone. Only
-`claude-or` remains as a command, and you pass the alias or model each time:
+It deletes their symlinks (only symlinks that point to `claude-or`) and marks the aliases
+`"link": false` in `aliases.json`; the aliases themselves stay. You pass the alias or model to
+`claude-or` instead:
 
 ```bash
 claude-or ccds                     # alias from aliases.json
 claude-or deepseek/deepseek-v4-pro # or the model id
 ```
 
-`claude-or --link` brings the symlinks back. `--add` and `--remove` also run `--link`, so they
-recreate all the symlinks. After either one, run `--unlink` again if you want to stay
-symlink-free.
+Turned-off aliases stay unlinked through `--sync`, `--add`, `--remove` and `--self-update`.
+To bring them back: `claude-or --link ccfree` for one, or `claude-or --link` for all (asks first).
 
 ## Delegating from a Claude Code session
 

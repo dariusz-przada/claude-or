@@ -6,11 +6,12 @@
 #   claude-or <alias> [claude args...]                 alias from aliases.json
 #   <alias> [claude args...]                           via symlink named like the alias
 #   claude-or --list                                   show aliases
-#   claude-or --add <alias> <model-id> [context]       add alias to aliases.json, then --link
+#   claude-or --add <alias> <model-id> [context]       add alias to aliases.json and link it
 #   claude-or --update <alias> <property> <value>      set model, context or small of an alias
-#   claude-or --remove <alias>...                      remove alias(es), then --link
-#   claude-or --link                                   sync symlinks with aliases.json
-#   claude-or --unlink                                 remove all alias symlinks (aliases.json kept)
+#   claude-or --remove <alias>...                      remove alias(es) and their symlinks
+#   claude-or --sync                                   link aliases as aliases.json says ("link": false = off)
+#   claude-or --link [-y] [alias...]                   turn alias(es) on and link them (no names: all, asks)
+#   claude-or --unlink [-y] [alias...]                 turn alias(es) off, remove symlinks (no names: all, asks)
 #   claude-or --key-add <name> [key]                   save a named OpenRouter key (prompted if no key)
 #   claude-or --key-remove <index|name>...             delete saved key(s)
 #   claude-or --key-list                               show saved keys (masked), * = active
@@ -26,7 +27,7 @@
 # Config dir: ${XDG_CONFIG_HOME:-~/.config}/claude-or/
 #   aliases.json   {"defaults": {"small": "<model>"},
 #                   "aliases": {"<name>": {"model": "<id>", "context": <tokens>, "small": "<id>"}}}
-#                  "context" and "small" are optional.
+#                  "context", "small" and "link" are optional; "link": false is set by --unlink.
 #   keys.json      {"active": "<name>", "keys": [{"name": "<name>", "key": "<key>"}]} (chmod 600)
 #
 # Key lookup: the key given with --key-run or $OR_KEY, else $OPENROUTER_API_KEY, else the active key in keys.json, else macOS Keychain service
@@ -73,7 +74,8 @@ load_alias() {
 list_aliases() {
   need_aliases
   jq -r '.defaults.small as $ds | .aliases | to_entries[]
-    | [.key, .value.model, (.value.context // "-" | tostring), (.value.small // $ds // "-")] | @tsv' "$aliasfile" \
+    | [.key, .value.model, (.value.context // "-" | tostring), (.value.small // $ds // "-"),
+       (if .value.link == false then "off" else "on" end)] | @tsv' "$aliasfile" \
     | column -t -s $'\t'
 }
 
@@ -102,60 +104,144 @@ name_problem() {
 # Prints one row of link status: what happened, the alias, why (home dir shortened to ~).
 link_status() { printf '%-9s %-12s %s\n' "$1" "$2" "${3//$HOME/~}"; }
 
-# Syncs the symlinks next to the script with aliases.json and reports each alias. -q leaves out the
-# ones that were already linked. Returns 1 if an alias was left without a symlink.
-link_aliases() {
-  local quiet=0
-  [[ "$1" == -q ]] && quiet=1
-  need_aliases
-  local bindir="${self:h}" a target problem bad=0
-  local -a want
-  want=("${(@f)$(jq -r '.aliases | keys[]' "$aliasfile")}")
-  for a in $want; do
-    target="$bindir/$a"
-    problem="$(name_problem "$a")"
-    if [[ -n "$problem" ]]; then
-      (( bad++ ))
-      # The conflict appeared after linking: the old link would hide the other command, or never run.
-      # Only our own symlink is removed, never a file or link that belongs to something else.
-      if [[ -L "$target" && "$(readlink "$target")" == claude-or ]] && rm -f "$target"; then
-        link_status unlinked "$a" "$problem"
-      else
-        link_status skipped "$a" "$problem"
-      fi
-    elif [[ -L "$target" ]]; then
-      (( quiet )) || link_status ok "$a" "already linked"
-    elif ln -s claude-or "$target" 2>/dev/null; then
-      link_status linked "$a" "$target"
+# True if $1 is a symlink to this script: the only kind of file linking ever creates or removes.
+own_link() { [[ -L "$1" && "$(readlink "$1")" == claude-or ]]; }
+
+# Brings alias $1's symlink in line with aliases.json and prints its status; -q as $2 leaves out
+# aliases where nothing changed. Returns 1 if the alias should have a symlink but has none.
+link_one() {
+  local a="$1" quiet=0 target="${self:h}/$1" problem off
+  [[ "$2" == -q ]] && quiet=1
+  if [[ "$(jq -r --arg a "$a" '.aliases[$a].link' "$aliasfile")" == false ]]; then
+    off="turned off with --unlink; claude-or --link $a to turn on"
+    if own_link "$target" && rm -f "$target"; then
+      link_status unlinked "$a" "$off"
     else
-      (( bad++ )); link_status failed "$a" "can't create $target"
+      (( quiet )) || link_status off "$a" "$off"
     fi
-  done
-  # Drop symlinks to this script whose alias was removed from the JSON.
-  for target in "$bindir"/*(N@); do
-    a="${target:t}"
-    [[ "$(readlink "$target")" == claude-or && ${want[(Ie)$a]} -eq 0 ]] || continue
-    rm "$target" && link_status removed "$a" "no longer in aliases.json"
-  done
-  if (( bad )); then
-    print -u2 "$bad alias(es) without a symlink; they still run as claude-or <alias>, or pick another" \
+    return 0
+  fi
+  problem="$(name_problem "$a")"
+  if [[ -n "$problem" ]]; then
+    # The conflict appeared after linking: the old link would hide the other command, or never run.
+    # Only our own symlink is removed, never a file or link that belongs to something else.
+    if own_link "$target" && rm -f "$target"; then
+      link_status unlinked "$a" "$problem"
+    else
+      link_status skipped "$a" "$problem"
+    fi
+    return 1
+  elif [[ -L "$target" ]]; then
+    (( quiet )) || link_status ok "$a" "already linked"
+  elif ln -s claude-or "$target" 2>/dev/null; then
+    link_status linked "$a" "$target"
+  else
+    link_status failed "$a" "can't create $target"; return 1
+  fi
+}
+
+# Notes after linking: how many aliases ($1) are left without a symlink, and whether the symlinks'
+# directory is in PATH. Returns 1 if $1 > 0.
+link_summary() {
+  local bindir="${self:h}" d
+  if (( $1 )); then
+    print -u2 "$1 alias(es) without a symlink; they still run as claude-or <alias>, or pick another" \
       "name: claude-or --remove <alias>, then claude-or --add <new-name> <model-id>"
   fi
-  local d
   for d in $path; do [[ "${d:A}" == "${bindir:A}" ]] && break; done
   [[ "${d:A}" == "${bindir:A}" ]] \
     || print -u2 "note: $bindir is not in your PATH, so the alias symlinks won't be found"
-  (( bad == 0 ))
+  (( $1 == 0 ))
 }
 
-unlink_aliases() {
-  local target n=0
+# Links every alias as aliases.json says ("link": false stays unlinked) and removes symlinks of
+# aliases that are gone. -q leaves out aliases where nothing changed. Never asks anything.
+sync_links() {
+  need_aliases
+  local a target bad=0
+  local -a want
+  want=("${(@f)$(jq -r '.aliases | keys[]' "$aliasfile")}")
+  for a in $want; do link_one "$a" "$1" || (( bad++ )); done
   for target in "${self:h}"/*(N@); do
-    [[ "$(readlink "$target")" == claude-or ]] || continue
-    rm "$target" && print "removed ${target:t}" && (( n++ ))
+    a="${target:t}"
+    own_link "$target" && (( ${want[(Ie)$a]} == 0 )) || continue
+    rm "$target" && link_status removed "$a" "no longer in aliases.json"
+  done
+  link_summary $bad
+}
+
+# Asks question $1 [y/N] on the terminal; returns 1 unless answered y. Without a terminal it dies,
+# adding $2 to the message.
+confirm() {
+  { : < /dev/tty } 2>/dev/null || die "run in a terminal to confirm${2:+, $2}"
+  if ! read -q "?$1 [y/N] " < /dev/tty; then print; return 1; fi
+  print
+}
+
+# Splits "$@" into alias names (names) and -y/--yes (yes=1); both are set in the caller's scope.
+parse_link_args() {
+  local x
+  for x in "$@"; do
+    if [[ "$x" == (-y|--yes) ]]; then yes=1; else names+=("$x"); fi
+  done
+}
+
+# --link [-y] [alias...]: turns the named aliases on and links them; with no names, all of them.
+link_cmd() {
+  local yes=0 a bad=0 n off q
+  local -a names
+  parse_link_args "$@"
+  need_aliases
+  if (( $#names )); then
+    for a in $names; do need_alias "$a"; done
+    write_aliases --args 'reduce $ARGS.positional[] as $a (.; del(.aliases[$a].link))' "${names[@]}"
+    for a in ${(u)names}; do link_one "$a" || (( bad++ )); done
+    link_summary $bad
+    return
+  fi
+  n="$(jq '.aliases | length' "$aliasfile")"
+  off="$(jq '[.aliases[] | select(.link == false)] | length' "$aliasfile")"
+  q="This links all $n aliases in aliases.json"
+  (( off )) && q+=", including $off turned off with --unlink"
+  if (( ! yes )) && ! confirm "$q. Continue?" "or name the aliases, or pass --yes"; then
+    print "nothing changed"; return 0
+  fi
+  write_aliases 'del(.aliases[].link)'
+  sync_links
+}
+
+# --unlink [-y] [alias...]: turns the named aliases off and removes their symlinks; with no names,
+# all of them. aliases.json keeps the aliases, so claude-or <alias> still works.
+unlink_cmd() {
+  local yes=0 a target n
+  local -a names
+  parse_link_args "$@"
+  need_aliases
+  if (( $#names )); then
+    for a in $names; do need_alias "$a"; done
+    write_aliases --args 'reduce $ARGS.positional[] as $a (.; .aliases[$a].link = false)' "${names[@]}"
+    for a in ${(u)names}; do
+      target="${self:h}/$a"
+      if own_link "$target" && rm -f "$target"; then
+        link_status unlinked "$a" "symlink removed; claude-or $a still works, claude-or --link $a to restore"
+      else
+        link_status off "$a" "wasn't linked, now turned off; claude-or --link $a to turn on"
+      fi
+    done
+    return 0
+  fi
+  n="$(jq '.aliases | length' "$aliasfile")"
+  if (( ! yes )) && ! confirm "This removes the symlinks of all $n aliases; aliases.json keeps them, so they still run as claude-or <alias>. Continue?" "or name the aliases, or pass --yes"; then
+    print "nothing changed"; return 0
+  fi
+  write_aliases '.aliases[].link = false'
+  n=0
+  for target in "${self:h}"/*(N@); do
+    own_link "$target" && rm -f "$target" || continue
+    link_status unlinked "${target:t}" "symlink removed"; (( n++ ))
   done
   (( n )) || print "no alias symlinks to remove"
-  print "aliases.json is untouched: use claude-or <alias|model-id>, or claude-or --link to restore"
+  print "all aliases turned off; claude-or <alias> still works, claude-or --link [alias...] to restore"
 }
 
 # Applies jq filter/args "$@" to aliases.json, replacing the file only if jq succeeds.
@@ -212,7 +298,7 @@ add_alias() {
   write_aliases --arg a "$a" --arg m "$m" --arg c "$c" \
     '.aliases[$a] = {model: $m} + (if $c == "" then {} else {context: ($c | tonumber)} end)'
   print "added   $a -> $m${c:+ (context $c)}"
-  link_aliases -q
+  sync_links -q
   return 0
 }
 
@@ -248,7 +334,7 @@ remove_alias() {
   local a
   for a in "$@"; do need_alias "$a"; done
   write_aliases --args 'reduce $ARGS.positional[] as $a (.; del(.aliases[$a]))' "$@"
-  link_aliases -q
+  sync_links -q
   return 0
 }
 
@@ -278,7 +364,7 @@ self_update() {
   chmod 755 "$tmp" && mv "$tmp" "$self" || { rm -f "$tmp"; die "can't replace $self"; }
   print "updated $self to $tag"
   # Re-link with the new version, in case it changed how aliases are linked.
-  whence -p jq >/dev/null && [[ -r "$aliasfile" ]] && "$self" --link
+  whence -p jq >/dev/null && [[ -r "$aliasfile" ]] && "$self" --sync
   return 0
 }
 
@@ -504,11 +590,9 @@ confirm_delete() {
   local f
   print "this deletes:"
   for f in "$@"; do print "  $f"; done
-  { : < /dev/tty } 2>/dev/null || die "run in a terminal to confirm, nothing deleted"
-  if ! read -q "?Continue? [y/N] " < /dev/tty; then
-    print; print "nothing deleted"; return 1
+  if ! confirm "Continue?" "nothing deleted"; then
+    print "nothing deleted"; return 1
   fi
-  print
   for f in "$@"; do
     rm -rf -- "$f" && print "removed $f" || print -u2 "can't remove $f"
   done
@@ -543,7 +627,7 @@ self_factory_reset() {
   fi
   mkdir -p "$cfgdir" && print -r -- "$defaults" > "$aliasfile" || die "can't write $aliasfile"
   print "restored default $aliasfile"
-  link_aliases
+  sync_links
   kept_key_notes
 }
 
@@ -570,18 +654,23 @@ Usage:
   claude-or <model-id> [claude args...]         any OpenRouter model, no alias needed
 
 Aliases:
-  claude-or --list                              show aliases (name, model, context, background model)
-  claude-or --add <alias> <model-id> [context]  validate and add an alias, then --link
+  claude-or --list                              show aliases (name, model, context, background model,
+                                                link on/off)
+  claude-or --add <alias> <model-id> [context]  validate and add an alias, then link it
                                                 (context defaults to the model's window on OpenRouter)
   claude-or --update <alias> <property> <value>
                                                 validate and set an alias property:
                                                 model, small (OpenRouter model id), context (tokens)
   claude-or --remove <alias>...                 remove alias(es) and their symlinks
-  claude-or --link                              sync symlinks with aliases.json and show each alias:
-                                                linked, ok, skipped/unlinked (with the reason, e.g.
-                                                another command of that name exists), removed
-  claude-or --unlink                            remove all alias symlinks; aliases.json is kept,
-                                                so claude-or <alias> still works
+  claude-or --sync                              link every alias as aliases.json says (turned-off ones
+                                                stay unlinked), drop symlinks of removed aliases, and show
+                                                each alias: linked, ok, off, skipped/unlinked (with the
+                                                reason, e.g. another command of that name exists), removed
+  claude-or --link [-y] [alias...]              turn the named aliases on and link them; with no names
+                                                all of them, after a [y/N] prompt (-y: don't ask)
+  claude-or --unlink [-y] [alias...]            turn the named aliases off and remove their symlinks;
+                                                aliases.json keeps them, so claude-or <alias> still works.
+                                                With no names all of them, after a [y/N] prompt
 
 OpenRouter keys:
   claude-or --key-add <name> [key]              verify and save a named OpenRouter key; the first one
@@ -618,10 +707,12 @@ Examples:
   claude-or --add ccluna openai/gpt-6-luna      add alias ccluna
   claude-or --update ccluna small openai/gpt-5-nano
                                                 cheaper background model for ccluna
+  claude-or --unlink ccfree                     drop the ccfree command, keep the alias
+  claude-or --link ccfree                       bring it back
   claude-or --remove ccluna                     remove it again
 
 Config: $cfgdir/
-  aliases.json  alias definitions (edit by hand, then run claude-or --link)
+  aliases.json  alias definitions (edit by hand, then run claude-or --sync)
   keys.json     saved OpenRouter keys and the active one (managed with --key-*)
 Key lookup: --key-run / OR_KEY key, \$OPENROUTER_API_KEY, active key in keys.json, Keychain "openrouter-api-key"
 Overrides: OR_CONTEXT (context window), OR_SMALL_MODEL (background model),
@@ -641,8 +732,9 @@ case "$name" in
   claude-or)
     case "$1" in
       --list)   list_aliases; exit ;;
-      --link)   link_aliases; exit ;;
-      --unlink) unlink_aliases; exit ;;
+      --sync)   shift; (( $# == 0 )) || die "usage: claude-or --sync"; sync_links; exit ;;
+      --link)   shift; link_cmd "$@"; exit ;;
+      --unlink) shift; unlink_cmd "$@"; exit ;;
       --add)    shift; add_alias "$@"; exit ;;
       --update) shift; update_alias "$@"; exit ;;
       --remove) shift; remove_alias "$@"; exit ;;
