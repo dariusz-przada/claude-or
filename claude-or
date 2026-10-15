@@ -29,7 +29,7 @@
 #                  "context" and "small" are optional.
 #   keys.json      {"active": "<name>", "keys": [{"name": "<name>", "key": "<key>"}]} (chmod 600)
 #
-# Key lookup: the key given with --key-run, else $OPENROUTER_API_KEY, else the active key in keys.json, else macOS Keychain service
+# Key lookup: the key given with --key-run or $OR_KEY, else $OPENROUTER_API_KEY, else the active key in keys.json, else macOS Keychain service
 # "openrouter-api-key".
 #   security add-generic-password -a "$USER" -s openrouter-api-key -w
 
@@ -569,6 +569,10 @@ Examples:
   ccds -p "explain this repo" < /dev/null       one-shot, headless (e.g. from another Claude session)
   claude-or ccdsf --resume                      resume a session on DeepSeek V4 Flash
   claude-or --key-run work ccds                 DeepSeek V4 Pro billed to the saved key 'work'
+  OR_KEY=work claude-or ccds                    same, with OR_KEY
+  OR_KEY=work ccds                              same, through the alias symlink
+  OR_KEY=2 ccdsf --resume                       resume on DeepSeek V4 Flash with saved key #2
+  OR_KEY=work claude-or qwen/qwen3-coder        any model id with a saved key
   claude-or moonshotai/kimi-k3                  try a model once without an alias
   OR_CONTEXT=262144 claude-or qwen/qwen3-coder  same, with its real context window
   claude-or --add ccluna openai/gpt-6-luna      add alias ccluna
@@ -579,8 +583,9 @@ Examples:
 Config: $cfgdir/
   aliases.json  alias definitions (edit by hand, then run claude-or --link)
   keys.json     saved OpenRouter keys and the active one (managed with --key-*)
-Key lookup: --key-run key, \$OPENROUTER_API_KEY, active key in keys.json, Keychain "openrouter-api-key"
-Overrides: OR_CONTEXT (context window), OR_SMALL_MODEL (background model)
+Key lookup: --key-run / OR_KEY key, \$OPENROUTER_API_KEY, active key in keys.json, Keychain "openrouter-api-key"
+Overrides: OR_CONTEXT (context window), OR_SMALL_MODEL (background model),
+           OR_KEY (saved key by index or name, like --key-run)
 EOF
   if ! whence -p jq >/dev/null; then
     print "\nAliases need jq (not installed); claude-or <vendor/model-id> works without it."
@@ -636,6 +641,10 @@ esac
 
 ctx="${OR_CONTEXT:-$ctx}"
 small="${OR_SMALL_MODEL:-${small:-$model}}"
+# OR_KEY does what --key-run does, and also works with alias symlinks; --key-run wins.
+if [[ -z "$runkey" && -n "$OR_KEY" ]]; then
+  need_keys; resolve_key "$OR_KEY"; runkey="$kname"
+fi
 
 if [[ -n "$runkey" ]]; then
   # A key named with --key-run wins over every other source, $OPENROUTER_API_KEY included.

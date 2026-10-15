@@ -140,8 +140,12 @@ claude-or --key-list
 claude-or --key-switch 2                   # by index...
 claude-or --key-switch personal            # ...or by name
 claude-or --key-remove ci                  # also by index or name, several at once
-claude-or --key-run personal ccds          # one run with another saved key, active key unchanged
-claude-or --key-run 1 deepseek/deepseek-v4-flash -p "hi"
+# One run with another saved key; the active key stays unchanged.
+claude-or --key-run personal ccds          # through claude-or: an alias...
+claude-or --key-run 1 deepseek/deepseek-v4-flash -p "hi"   # ...or any model id, by key index
+OR_KEY=personal claude-or ccds             # the same with the OR_KEY variable
+OR_KEY=personal ccds                       # through an alias symlink (only OR_KEY works here)
+OR_KEY=2 ccdsf --resume                    # with Claude Code args, key by index
 claude-or --stats                          # spend of the active key, or: --stats 2, --stats work
 # key         work (sk-or...123c), active
 # today       $0.42
@@ -166,7 +170,8 @@ claude-or --stats                          # spend of the active key, or: --stat
 
 The script looks for the key in this order:
 
-1. **The key given with `--key-run`**, for that run only.
+1. **The key given with `--key-run`**, or else with `OR_KEY=<index|name>`, for that run only.
+   `OR_KEY` also works with alias symlinks: `OR_KEY=work ccds`.
 2. **`$OPENROUTER_API_KEY`** environment variable, e.g. for a one-off run with a key that isn't saved.
 3. **The active key** in `keys.json`.
 4. **macOS Keychain**. This command prompts for the key, so it never lands in shell history:
@@ -205,6 +210,7 @@ Environment overrides for a single run:
 |---|---|
 | `OR_CONTEXT` | `context` |
 | `OR_SMALL_MODEL` | `small` |
+| `OR_KEY` | the key: a saved key's index or name, like `--key-run`, but it also works with alias symlinks (`OR_KEY=work ccds`) |
 
 ## Add a new alias
 
