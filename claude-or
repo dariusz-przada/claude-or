@@ -15,6 +15,7 @@
 #   claude-or --key-remove <index|name>...             delete saved key(s)
 #   claude-or --key-list                               show saved keys (masked), * = active
 #   claude-or --key-switch <index|name>                make a saved key the active one
+#   claude-or --stats [index|name]                     spend of a saved key on OpenRouter (default: active)
 #   claude-or --self-update                            update to the latest release tag
 #   claude-or --self-factory-reset                     delete keys and aliases, restore default aliases
 #   claude-or --self-uninstall                         also delete the config dir and this script
@@ -377,6 +378,78 @@ key_switch() {
   env_key_note
 }
 
+# Formats a dollar amount; sub-cent amounts get 4 decimals so they don't show as $0.00.
+money() {
+  if (( $1 > 0 && $1 < 0.01 )); then printf '$%.4f' "$1"; else printf '$%.2f' "$1"; fi
+}
+
+# Shortens an ISO timestamp (2026-10-19T00:00:00.000Z) to "2026-10-19 00:00 UTC".
+utc_time() {
+  local t="${1/T/ }"
+  print -rn -- "${t[1,16]} UTC"
+}
+
+# Shows the spend OpenRouter has recorded for a saved key (default: the active one).
+key_stats() {
+  (( $# <= 1 )) || die "usage: claude-or --stats [index|name]"
+  local kname resp code active
+  need_keys
+  active="$(jq -r '.active as $a | .keys[] | select(.name == $a) | .name' "$keysfile")"
+  if (( $# )); then
+    resolve_key "$1"
+  else
+    [[ -n "$active" ]] || die "no active key; claude-or --stats <index|name>"
+    kname="$active"
+  fi
+
+  # The header goes to curl on stdin, so the key isn't visible in ps.
+  resp="$(jq -r --arg n "$kname" '.keys[] | select(.name == $n) | "Authorization: Bearer \(.key)"' "$keysfile" \
+    | curl -sS -m 20 -w '\n%{http_code}' -H @- https://openrouter.ai/api/v1/key 2>/dev/null)"
+  code="${resp##*$'\n'}"
+  resp="${resp%$'\n'*}"
+  case "$code" in
+    200) ;;
+    401|403) die "OpenRouter rejected key '$kname'" ;;
+    *) die "couldn't get stats from OpenRouter (HTTP ${code:-000})" ;;
+  esac
+
+  local -a rows
+  # A budget that is just the key's own limit only adds its reset time to the limit row.
+  rows=("${(@f)$(jq -r '.data
+    | (.effective_budget // null) as $b
+    | ($b != null and $b.limit_usd == .limit and ($b.reset_interval // null) == .limit_reset) as $same
+    | ["today", .usage_daily], ["this week", .usage_weekly], ["this month", .usage_monthly], ["total", .usage],
+      ["limit", .limit, .limit_remaining, (.limit_reset // ""), (if $same then $b.resets_at // "" else "" end)],
+      ($b // empty | select($same | not)
+        | ["budget", .limit_usd, .spend_usd, (.reset_interval // ""), (.resets_at // "")]),
+      (select((.byok_usage // 0) > 0) | ["byok", .byok_usage_daily, .byok_usage_weekly, .byok_usage_monthly, .byok_usage]),
+      (select(.is_free_tier) | .free_model_daily_requests // empty | ["free reqs", .used, .limit])
+    | map(. // "" | tostring) | @tsv' <<< "$resp")}") \
+    || die "unexpected response from OpenRouter"
+
+  local row label line
+  local -a f
+  printf '%-11s %s\n' key "$kname ($(masked_key "$kname"))${${(M)kname:#$active}:+, active}"
+  for row in $rows; do
+    f=("${(@ps:\t:)row}")
+    label="$f[1]"
+    case "$label" in
+      limit)
+        if [[ -z "$f[2]" ]]; then line="none"
+        else line="$(money "$f[2]")${f[4]:+ $f[4]}, $(money "$f[3]") left${f[5]:+, resets $(utc_time "$f[5]")}"; fi ;;
+      budget)
+        line="$(money "$f[2]")${f[4]:+ $f[4]}, $(money "$f[3]") spent${f[5]:+, resets $(utc_time "$f[5]")}" ;;
+      byok)
+        line="today $(money "$f[2]"), week $(money "$f[3]"), month $(money "$f[4]"), total $(money "$f[5]")" ;;
+      "free reqs")
+        line="$f[2]/$f[3] today" ;;
+      *) line="$(money "$f[2]")" ;;
+    esac
+    printf '%-11s %s\n' "$label" "$line"
+  done
+  env_key_note
+}
+
 # Prints the symlinks next to the script that point to it, one per line.
 alias_links() {
   local target
@@ -475,6 +548,8 @@ OpenRouter keys:
   claude-or --key-remove <index|name>...        delete saved key(s)
   claude-or --key-list                          show saved keys: * active, index, name, masked key
   claude-or --key-switch <index|name>           make a saved key the active one
+  claude-or --stats [index|name]                spend OpenRouter recorded for a saved key: today, week,
+                                                month, total, limit (default: the active key)
 
 claude-or itself:
   claude-or --self-update                       update to the latest release tag (aliases.json kept)
@@ -524,6 +599,7 @@ case "$name" in
       --key-remove) shift; key_remove "$@"; exit ;;
       --key-list)   shift; key_list "$@"; exit ;;
       --key-switch) shift; key_switch "$@"; exit ;;
+      --stats)      shift; key_stats "$@"; exit ;;
       --set-key|--unset-key)
         die "$1 was replaced by the key manager: --key-add, --key-remove, --key-list, --key-switch" ;;
       --self-update)        self_update; exit ;;

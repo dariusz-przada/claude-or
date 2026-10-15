@@ -86,6 +86,7 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --key-remove <index\|name>...` | Delete saved key(s) |
 | `claude-or --key-list` | Show saved keys: active (`*`), index, name, masked key |
 | `claude-or --key-switch <index\|name>` | Make a saved key the active one |
+| `claude-or --stats [index\|name]` | Spend OpenRouter recorded for a saved key (today, week, month, total) and its limit; default: the active key |
 | **claude-or itself** | |
 | `claude-or --self-update` | Replace the installed script with the latest release tag from GitHub, keeping `aliases.json` |
 | `claude-or --self-factory-reset` | Delete `keys.json`, `aliases.json` and all alias symlinks, after a `[y/N]` confirmation, then restore the default `aliases.json` from GitHub and link it. The script itself, a Keychain entry and `$OPENROUTER_API_KEY` stay |
@@ -138,6 +139,13 @@ claude-or --key-list
 claude-or --key-switch 2                   # by index...
 claude-or --key-switch personal            # ...or by name
 claude-or --key-remove ci                  # also by index or name, several at once
+claude-or --stats                          # spend of the active key, or: --stats 2, --stats work
+# key         work (sk-or...123c), active
+# today       $0.42
+# this week   $3.10
+# this month  $12.80
+# total       $57.33
+# limit       $100.00 monthly, $87.20 left, resets 2026-11-01 00:00 UTC
 ```
 
 - Keys live in `~/.config/claude-or/keys.json` (mode 600) together with the name of the active key.
@@ -146,6 +154,9 @@ claude-or --key-remove ci                  # also by index or name, several at o
 - Names must be unique and use letters, digits, `.`, `_`, `-`, and can't be only digits, so a number
   always means an index. Indexes are positions in the list (1, 2, 3, …): removing a key moves the
   ones after it up.
+- `--stats` asks OpenRouter (`GET /api/v1/key`) what it billed to that key; weeks and months are
+  UTC, weeks start on Monday. It shows cost only: OpenRouter doesn't report tokens per key, and
+  claude-or never sees Claude Code's API traffic. BYOK spend and a separate budget appear when set.
 - Removing the active key leaves no key active until you `--key-switch` to another one.
 - The `api_key` file and `--set-key` / `--unset-key` from older versions are no longer used. If you
   had a key there, add it again with `claude-or --key-add <name>`.
