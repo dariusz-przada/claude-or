@@ -86,6 +86,7 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --key-remove <index\|name>...` | Delete saved key(s) |
 | `claude-or --key-list` | Show saved keys: active (`*`), index, name, masked key |
 | `claude-or --key-switch <index\|name>` | Make a saved key the active one |
+| `claude-or --key-run <index\|name> <alias\|model-id> [claude args...]` | Run an alias or model with a saved key, just this once; the active key stays as it is |
 | `claude-or --stats [index\|name]` | Spend OpenRouter recorded for a saved key (today, week, month, total) and its limit; default: the active key |
 | **claude-or itself** | |
 | `claude-or --self-update` | Replace the installed script with the latest release tag from GitHub, keeping `aliases.json` |
@@ -139,6 +140,8 @@ claude-or --key-list
 claude-or --key-switch 2                   # by index...
 claude-or --key-switch personal            # ...or by name
 claude-or --key-remove ci                  # also by index or name, several at once
+claude-or --key-run personal ccds          # one run with another saved key, active key unchanged
+claude-or --key-run 1 deepseek/deepseek-v4-flash -p "hi"
 claude-or --stats                          # spend of the active key, or: --stats 2, --stats work
 # key         work (sk-or...123c), active
 # today       $0.42
@@ -163,9 +166,10 @@ claude-or --stats                          # spend of the active key, or: --stat
 
 The script looks for the key in this order:
 
-1. **`$OPENROUTER_API_KEY`** environment variable, e.g. for a one-off run with another key.
-2. **The active key** in `keys.json`.
-3. **macOS Keychain**. This command prompts for the key, so it never lands in shell history:
+1. **The key given with `--key-run`**, for that run only.
+2. **`$OPENROUTER_API_KEY`** environment variable, e.g. for a one-off run with a key that isn't saved.
+3. **The active key** in `keys.json`.
+4. **macOS Keychain**. This command prompts for the key, so it never lands in shell history:
    ```bash
    security add-generic-password -a "$USER" -s openrouter-api-key -w
    ```

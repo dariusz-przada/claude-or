@@ -16,6 +16,8 @@
 #   claude-or --key-list                               show saved keys (masked), * = active
 #   claude-or --key-switch <index|name>                make a saved key the active one
 #   claude-or --stats [index|name]                     spend of a saved key on OpenRouter (default: active)
+#   claude-or --key-run <index|name> <alias|model-id> [claude args...]
+#                                                      run with a saved key, active key unchanged
 #   claude-or --self-update                            update to the latest release tag
 #   claude-or --self-factory-reset                     delete keys and aliases, restore default aliases
 #   claude-or --self-uninstall                         also delete the config dir and this script
@@ -27,7 +29,7 @@
 #                  "context" and "small" are optional.
 #   keys.json      {"active": "<name>", "keys": [{"name": "<name>", "key": "<key>"}]} (chmod 600)
 #
-# Key lookup: $OPENROUTER_API_KEY, else the active key in keys.json, else macOS Keychain service
+# Key lookup: the key given with --key-run, else $OPENROUTER_API_KEY, else the active key in keys.json, else macOS Keychain service
 # "openrouter-api-key".
 #   security add-generic-password -a "$USER" -s openrouter-api-key -w
 
@@ -550,6 +552,9 @@ OpenRouter keys:
   claude-or --key-switch <index|name>           make a saved key the active one
   claude-or --stats [index|name]                spend OpenRouter recorded for a saved key: today, week,
                                                 month, total, limit (default: the active key)
+  claude-or --key-run <index|name> <alias|model-id> [claude args...]
+                                                run an alias or model with a saved key, just this once;
+                                                the active key stays as it is
 
 claude-or itself:
   claude-or --self-update                       update to the latest release tag (aliases.json kept)
@@ -563,6 +568,7 @@ Examples:
   ccds                                          interactive session on DeepSeek V4 Pro
   ccds -p "explain this repo" < /dev/null       one-shot, headless (e.g. from another Claude session)
   claude-or ccdsf --resume                      resume a session on DeepSeek V4 Flash
+  claude-or --key-run work ccds                 DeepSeek V4 Pro billed to the saved key 'work'
   claude-or moonshotai/kimi-k3                  try a model once without an alias
   OR_CONTEXT=262144 claude-or qwen/qwen3-coder  same, with its real context window
   claude-or --add ccluna openai/gpt-6-luna      add alias ccluna
@@ -573,7 +579,7 @@ Examples:
 Config: $cfgdir/
   aliases.json  alias definitions (edit by hand, then run claude-or --link)
   keys.json     saved OpenRouter keys and the active one (managed with --key-*)
-Key lookup: \$OPENROUTER_API_KEY, active key in keys.json, Keychain "openrouter-api-key"
+Key lookup: --key-run key, \$OPENROUTER_API_KEY, active key in keys.json, Keychain "openrouter-api-key"
 Overrides: OR_CONTEXT (context window), OR_SMALL_MODEL (background model)
 EOF
   if ! whence -p jq >/dev/null; then
@@ -600,6 +606,10 @@ case "$name" in
       --key-list)   shift; key_list "$@"; exit ;;
       --key-switch) shift; key_switch "$@"; exit ;;
       --stats)      shift; key_stats "$@"; exit ;;
+      --key-run)
+        # Not an exit: picks the key for this run, then the alias/model below runs as usual.
+        (( $# >= 3 )) || die "usage: claude-or --key-run <index|name> <alias|model-id> [claude args...]"
+        need_keys; resolve_key "$2"; runkey="$kname"; shift 2 ;;
       --set-key|--unset-key)
         die "$1 was replaced by the key manager: --key-add, --key-remove, --key-list, --key-switch" ;;
       --self-update)        self_update; exit ;;
@@ -627,10 +637,15 @@ esac
 ctx="${OR_CONTEXT:-$ctx}"
 small="${OR_SMALL_MODEL:-${small:-$model}}"
 
-key="$OPENROUTER_API_KEY"
-[[ -z "$key" && -r "$keysfile" ]] && whence -p jq >/dev/null \
-  && key="$(jq -r '.active as $a | .keys[]? | select(.name == $a) | .key' "$keysfile" 2>/dev/null)"
-[[ -z "$key" ]] && key="$(security find-generic-password -a "$USER" -s openrouter-api-key -w 2>/dev/null)"
+if [[ -n "$runkey" ]]; then
+  # A key named with --key-run wins over every other source, $OPENROUTER_API_KEY included.
+  key="$(jq -r --arg n "$runkey" '.keys[] | select(.name == $n) | .key' "$keysfile")"
+else
+  key="$OPENROUTER_API_KEY"
+  [[ -z "$key" && -r "$keysfile" ]] && whence -p jq >/dev/null \
+    && key="$(jq -r '.active as $a | .keys[]? | select(.name == $a) | .key' "$keysfile" 2>/dev/null)"
+  [[ -z "$key" ]] && key="$(security find-generic-password -a "$USER" -s openrouter-api-key -w 2>/dev/null)"
+fi
 [[ -n "$key" ]] || die "no OpenRouter key: claude-or --key-add <name> (or --key-switch if keys are saved;
 or \$OPENROUTER_API_KEY, or Keychain 'openrouter-api-key')"
 
