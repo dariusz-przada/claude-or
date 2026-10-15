@@ -88,7 +88,7 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --key-list` | Show saved keys: active (`*`), index, name, masked key |
 | `claude-or --key-switch <index\|name>` | Make a saved key the active one |
 | `claude-or --key-run <index\|name> <alias\|model-id> [claude args...]` | Run an alias or model with a saved key, just this once; the active key stays as it is |
-| `claude-or --key-stats [index\|name]` | Spend OpenRouter recorded for a saved key (today, week, month, total) and its limit; default: the active key |
+| `claude-or --key-stats [index\|name\|--all]` | Spend OpenRouter recorded for a saved key (today, week, month, total) and its limit; default: the active key. `--all` (`-a`): every saved key in one table, with a sum |
 | **claude-or itself** | |
 | `claude-or --self-update` | Replace the installed script with the latest release tag from GitHub, keeping `aliases.json` |
 | `claude-or --self-factory-reset [-y]` | Delete `keys.json`, `aliases.json` and all alias symlinks, after a `[y/N]` confirmation (`-y`/`--yes` skips it), then restore the default `aliases.json` from GitHub and link it. The script itself, a Keychain entry and `$OPENROUTER_API_KEY` stay |
@@ -161,6 +161,15 @@ claude-or --key-stats                      # spend of the active key, or: --key-
 # │ total      │ $57.33                                                    │
 # │ limit      │ $100.00 monthly, $87.20 left, resets 2026-11-01 00:00 UTC │
 # └────────────┴───────────────────────────────────────────────────────────┘
+claude-or --key-stats --all                # every saved key, plus the sum
+# ┌────────────┬───────┬───────────┬────────────┬────────┬───────────────────────────┐
+# │ KEY        │ TODAY │ THIS WEEK │ THIS MONTH │ TOTAL  │ LIMIT                     │
+# ├────────────┼───────┼───────────┼────────────┼────────┼───────────────────────────┤
+# │ * work     │ $0.42 │ $3.10     │ $12.80     │ $57.33 │ none                      │
+# │   personal │ $0.00 │ $0.02     │ $0.02      │ $0.02  │ $10.00 weekly, $9.98 left │
+# │   ci       │ -     │ -         │ -          │ -      │ rejected by OpenRouter    │
+# │ all keys   │ $0.42 │ $3.12     │ $12.82     │ $57.35 │                           │
+# └────────────┴───────┴───────────┴────────────┴────────┴───────────────────────────┘
 ```
 
 - Keys live in `~/.config/claude-or/keys.json` (mode 600) together with the name of the active key.
@@ -169,7 +178,8 @@ claude-or --key-stats                      # spend of the active key, or: --key-
 - Names must be unique and use letters, digits, `.`, `_`, `-`, and can't be only digits, so a number
   always means an index. Indexes are positions in the list (1, 2, 3, …): removing a key moves the
   ones after it up.
-- `--key-stats` asks OpenRouter (`GET /api/v1/key`) what it billed to that key; weeks and months are
+- `--key-stats` asks OpenRouter (`GET /api/v1/key`) what it billed to that key (`--all`: to each saved
+  key; a key OpenRouter rejects shows the error in its row and is left out of the sum); weeks and months are
   UTC, weeks start on Monday. It shows cost only: OpenRouter doesn't report tokens per key, and
   claude-or never sees Claude Code's API traffic. BYOK spend and a separate budget appear when set.
 - Removing the active key leaves no key active until you `--key-switch` to another one.
