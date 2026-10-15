@@ -135,9 +135,13 @@ claude-or --key-add work                   # prompts for the key (hidden input)
 pbpaste | claude-or --key-add personal     # or pipe it in, e.g. from the clipboard
 claude-or --key-add ci sk-or-v1-...        # or as an argument (ends up in shell history)
 claude-or --key-list
-#   *  1  work      sk-or...123c
-#      2  personal  sk-or...9f0a
-#      3  ci        sk-or...77ab
+# ┌────────┬───┬──────────┬──────────────┐
+# │ ACTIVE │ # │ NAME     │ KEY          │
+# ├────────┼───┼──────────┼──────────────┤
+# │ *      │ 1 │ work     │ sk-or...123c │
+# │        │ 2 │ personal │ sk-or...9f0a │
+# │        │ 3 │ ci       │ sk-or...77ab │
+# └────────┴───┴──────────┴──────────────┘
 claude-or --key-switch 2                   # by index...
 claude-or --key-switch personal            # ...or by name
 claude-or --key-remove ci                  # also by index or name, several at once
@@ -148,12 +152,15 @@ OR_KEY=personal claude-or ccds             # the same with the OR_KEY variable
 OR_KEY=personal ccds                       # through an alias symlink (only OR_KEY works here)
 OR_KEY=2 ccdsf --resume                    # with Claude Code args, key by index
 claude-or --key-stats                      # spend of the active key, or: --key-stats 2, --key-stats work
-# key         work (sk-or...123c), active
-# today       $0.42
-# this week   $3.10
-# this month  $12.80
-# total       $57.33
-# limit       $100.00 monthly, $87.20 left, resets 2026-11-01 00:00 UTC
+# ┌────────────┬───────────────────────────────────────────────────────────┐
+# │ key        │ work (sk-or...123c), active                               │
+# ├────────────┼───────────────────────────────────────────────────────────┤
+# │ today      │ $0.42                                                     │
+# │ this week  │ $3.10                                                     │
+# │ this month │ $12.80                                                    │
+# │ total      │ $57.33                                                    │
+# │ limit      │ $100.00 monthly, $87.20 left, resets 2026-11-01 00:00 UTC │
+# └────────────┴───────────────────────────────────────────────────────────┘
 ```
 
 - Keys live in `~/.config/claude-or/keys.json` (mode 600) together with the name of the active key.
@@ -267,14 +274,18 @@ existing alias, [`--update`](#change-an-alias) is simpler.
    `--link` and `--sync` refuse a name that already exists as another command, so an alias can't shadow a
    real tool. If you create the symlink yourself, check first with `command -v ccluna`.
 
-   `--sync` (and `--link`) print one line per alias:
+   `--sync` (and `--link`) show a table with one row per alias:
    ```
-   linked    ccluna       ~/.local/bin/ccluna
-   ok        ccds         already linked
-   off       ccfree       turned off with --unlink; claude-or --link ccfree to turn on
-   skipped   git          another 'git' is already installed: /usr/bin/git
-   unlinked  ccx          another 'ccx' is already installed: /opt/homebrew/bin/ccx
-   removed   ccold        no longer in aliases.json
+   ┌──────────┬────────┬────────────────────────────────────────────────────────────────┐
+   │ STATUS   │ ALIAS  │ DETAILS                                                        │
+   ├──────────┼────────┼────────────────────────────────────────────────────────────────┤
+   │ linked   │ ccluna │ ~/.local/bin/ccluna                                            │
+   │ ok       │ ccds   │ already linked                                                 │
+   │ off      │ ccfree │ turned off with --unlink; claude-or --link ccfree to turn on   │
+   │ skipped  │ git    │ another 'git' is already installed: /usr/bin/git               │
+   │ unlinked │ ccx    │ another 'ccx' is already installed: /opt/homebrew/bin/ccx      │
+   │ removed  │ ccold  │ no longer in aliases.json                                      │
+   └──────────┴────────┴────────────────────────────────────────────────────────────────┘
    ```
    - `skipped`: no symlink, because of the reason shown: another command of that name in `PATH`,
      a shell builtin, an invalid name, or a file that isn't a claude-or symlink.

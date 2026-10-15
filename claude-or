@@ -71,12 +71,49 @@ load_alias() {
   [[ -n "$model" ]] || die "alias '$1' has no \"model\" in $aliasfile"
 }
 
+# Prints tab-separated rows from stdin as a box table; the first row is the header.
+table() {
+  # Column widths count characters, which needs a UTF-8 locale; pick one if the current isn't.
+  local probe="─"
+  if (( ${(m)#probe} != 1 )); then
+    local LC_ALL=C.UTF-8
+    (( ${(m)#probe} == 1 )) || LC_ALL=en_US.UTF-8
+  fi
+  local line i out
+  local -a rows cells w
+  while IFS= read -r line; do rows+=("$line"); done
+  (( $#rows )) || return 0
+  for line in $rows; do
+    cells=("${(@ps:\t:)line}")
+    for i in {1..$#cells}; do
+      (( ${(m)#cells[i]} > ${w[i]:-0} )) && w[i]=${(m)#cells[i]}
+    done
+  done
+  table_rule() {
+    out="$1"
+    for i in {1..$#w}; do
+      out+="${(pl:$((w[i] + 2))::─:)}"
+      (( i < $#w )) && out+="$2"
+    done
+    print -r -- "$out$3"
+  }
+  table_rule ┌ ┬ ┐
+  for line in $rows; do
+    cells=("${(@ps:\t:)line}")
+    out="│"
+    for i in {1..$#w}; do out+=" ${(r:w[i]:)cells[i]} │"; done
+    print -r -- "$out"
+    [[ "$line" == "$rows[1]" ]] && table_rule ├ ┼ ┤
+  done
+  table_rule └ ┴ ┘
+}
+
 list_aliases() {
   need_aliases
   jq -r '.defaults.small as $ds | .aliases | to_entries[]
     | [.key, .value.model, (.value.context // "-" | tostring), (.value.small // $ds // "-"),
        (if .value.link == false then "off" else "on" end)] | @tsv' "$aliasfile" \
-    | column -t -s $'\t'
+    | { print "ALIAS\tMODEL\tCONTEXT\tBACKGROUND MODEL\tLINK"; cat } | table
 }
 
 # Prints why alias name $1 can't get a symlink next to the script; prints nothing if it can.
@@ -101,8 +138,14 @@ name_problem() {
   done
 }
 
-# Prints one row of link status: what happened, the alias, why (home dir shortened to ~).
-link_status() { printf '%-9s %-12s %s\n' "$1" "$2" "${3//$HOME/~}"; }
+# Collects one row of link status: what happened, the alias, why (home dir shortened to ~).
+# link_flush prints the collected rows as a table.
+typeset -ga link_rows
+link_status() { link_rows+=("$1"$'\t'"$2"$'\t'"${3//$HOME/~}"); }
+link_flush() {
+  (( $#link_rows )) && { print "STATUS\tALIAS\tDETAILS"; print -rl -- $link_rows; } | table
+  link_rows=()
+}
 
 # True if $1 is a symlink to this script: the only kind of file linking ever creates or removes.
 own_link() { [[ -L "$1" && "$(readlink "$1")" == claude-or ]]; }
@@ -167,6 +210,7 @@ sync_links() {
     own_link "$target" && (( ${want[(Ie)$a]} == 0 )) || continue
     rm "$target" && link_status removed "$a" "no longer in aliases.json"
   done
+  link_flush
   link_summary $bad
 }
 
@@ -196,6 +240,7 @@ link_cmd() {
     for a in $names; do need_alias "$a"; done
     write_aliases --args 'reduce $ARGS.positional[] as $a (.; del(.aliases[$a].link))' "${names[@]}"
     for a in ${(u)names}; do link_one "$a" || (( bad++ )); done
+    link_flush
     link_summary $bad
     return
   fi
@@ -228,6 +273,7 @@ unlink_cmd() {
         link_status off "$a" "wasn't linked, now turned off; claude-or --link $a to turn on"
       fi
     done
+    link_flush
     return 0
   fi
   n="$(jq '.aliases | length' "$aliasfile")"
@@ -240,6 +286,7 @@ unlink_cmd() {
     own_link "$target" && rm -f "$target" || continue
     link_status unlinked "${target:t}" "symlink removed"; (( n++ ))
   done
+  link_flush
   (( n )) || print "no alias symlinks to remove"
   print "all aliases turned off; claude-or <alias> still works, claude-or --link [alias...] to restore"
 }
@@ -488,7 +535,7 @@ key_list() {
   fi
   jq -r "$jq_mask"' .active as $a | .keys | to_entries[]
     | [(if .value.name == $a then "*" else "" end), (.key + 1 | tostring), .value.name, (.value.key | mask)]
-    | @tsv' "$keysfile" | awk -F'\t' '{ printf "%1s %2s  %s\t%s\n", $1, $2, $3, $4 }' | column -t -s $'\t'
+    | @tsv' "$keysfile" | { print "ACTIVE\t#\tNAME\tKEY"; cat } | table
   jq -e '.active as $a | any(.keys[]; .name == $a)' "$keysfile" >/dev/null \
     || print -u2 "note: no active key; pick one: claude-or --key-switch <index|name>"
   env_key_note
@@ -554,8 +601,8 @@ key_stats() {
     || die "unexpected response from OpenRouter"
 
   local row label line
-  local -a f
-  printf '%-11s %s\n' key "$kname ($(masked_key "$kname"))${${(M)kname:#$active}:+, active}"
+  local -a f out
+  out=("key"$'\t'"$kname ($(masked_key "$kname"))${${(M)kname:#$active}:+, active}")
   for row in $rows; do
     f=("${(@ps:\t:)row}")
     label="$f[1]"
@@ -571,8 +618,9 @@ key_stats() {
         line="$f[2]/$f[3] today" ;;
       *) line="$(money "$f[2]")" ;;
     esac
-    printf '%-11s %s\n' "$label" "$line"
+    out+=("$label"$'\t'"$line")
   done
+  print -rl -- $out | table
   env_key_note
 }
 
