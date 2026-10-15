@@ -77,39 +77,75 @@ list_aliases() {
     | column -t -s $'\t'
 }
 
-# Prints why alias name $1 can't get a symlink; prints nothing if it can.
+# Prints why alias name $1 can't get a symlink next to the script; prints nothing if it can.
 name_problem() {
-  local a="$1" target="${self:h}/$1" other
+  local a="$1" target="${self:h}/$1" kind other
   if [[ ! "$a" =~ '^[A-Za-z0-9_.-]+$' || "$a" == claude-or ]]; then
-    print "invalid alias name '$a' (allowed: letters, digits, . _ -)"; return
+    print "invalid name (allowed: letters, digits, . _ -)"; return
   fi
-  if [[ -e "$target" && ! ( -L "$target" && "$(readlink "$target")" == claude-or ) ]]; then
-    print "$target exists and is not a claude-or symlink"; return
+  if [[ -e "$target" || -L "$target" ]] && [[ ! ( -L "$target" && "$(readlink "$target")" == claude-or ) ]]; then
+    print "$target already exists and isn't a claude-or symlink"; return
   fi
-  other="$(whence -pa "$a" | grep -vx "$target" | head -1)"
-  [[ -n "$other" ]] && print "'$a' would shadow $other, pick another name"
+  kind="$(whence -w -- "$a")"
+  kind="${kind##*: }"
+  if [[ "$kind" == (builtin|reserved) ]]; then
+    print "'$a' is a shell ${kind/reserved/keyword}, the symlink would never run"; return
+  fi
+  # Paths that resolve to this script (PATH listing the same dir twice, or via a symlinked dir)
+  # are this alias itself, not a clash.
+  for other in ${(f)"$(whence -pa -- "$a")"}; do
+    [[ "${other:A}" == "$self" ]] && continue
+    print "another '$a' is already installed: $other"; return
+  done
 }
 
+# Prints one row of link status: what happened, the alias, why (home dir shortened to ~).
+link_status() { printf '%-9s %-12s %s\n' "$1" "$2" "${3//$HOME/~}"; }
+
+# Syncs the symlinks next to the script with aliases.json and reports each alias. -q leaves out the
+# ones that were already linked. Returns 1 if an alias was left without a symlink.
 link_aliases() {
+  local quiet=0
+  [[ "$1" == -q ]] && quiet=1
   need_aliases
-  local bindir="${self:h}" a target problem
+  local bindir="${self:h}" a target problem bad=0
   local -a want
   want=("${(@f)$(jq -r '.aliases | keys[]' "$aliasfile")}")
   for a in $want; do
+    target="$bindir/$a"
     problem="$(name_problem "$a")"
     if [[ -n "$problem" ]]; then
-      print -u2 "skip $a: $problem"; continue
+      (( bad++ ))
+      # The conflict appeared after linking: the old link would hide the other command, or never run.
+      # Only our own symlink is removed, never a file or link that belongs to something else.
+      if [[ -L "$target" && "$(readlink "$target")" == claude-or ]] && rm -f "$target"; then
+        link_status unlinked "$a" "$problem"
+      else
+        link_status skipped "$a" "$problem"
+      fi
+    elif [[ -L "$target" ]]; then
+      (( quiet )) || link_status ok "$a" "already linked"
+    elif ln -s claude-or "$target" 2>/dev/null; then
+      link_status linked "$a" "$target"
+    else
+      (( bad++ )); link_status failed "$a" "can't create $target"
     fi
-    target="$bindir/$a"
-    ln -sfn claude-or "$target"
-    print "linked  $a"
   done
   # Drop symlinks to this script whose alias was removed from the JSON.
   for target in "$bindir"/*(N@); do
     a="${target:t}"
     [[ "$(readlink "$target")" == claude-or && ${want[(Ie)$a]} -eq 0 ]] || continue
-    rm "$target" && print "removed $a"
+    rm "$target" && link_status removed "$a" "no longer in aliases.json"
   done
+  if (( bad )); then
+    print -u2 "$bad alias(es) without a symlink; they still run as claude-or <alias>, or pick another" \
+      "name: claude-or --remove <alias>, then claude-or --add <new-name> <model-id>"
+  fi
+  local d
+  for d in $path; do [[ "${d:A}" == "${bindir:A}" ]] && break; done
+  [[ "${d:A}" == "${bindir:A}" ]] \
+    || print -u2 "note: $bindir is not in your PATH, so the alias symlinks won't be found"
+  (( bad == 0 ))
 }
 
 unlink_aliases() {
@@ -166,7 +202,7 @@ add_alias() {
   jq -e --arg a "$a" '.aliases | has($a)' "$aliasfile" >/dev/null \
     && die "alias '$a' already exists in $aliasfile"
   problem="$(name_problem "$a")"
-  [[ -z "$problem" ]] || die "$problem"
+  [[ -z "$problem" ]] || die "can't add alias '$a': $problem"
   [[ -z "$c" || "$c" == <-> ]] || die "context must be a whole number of tokens, got '$c'"
 
   # Verify the model on OpenRouter and take its context window if none was given.
@@ -176,7 +212,8 @@ add_alias() {
   write_aliases --arg a "$a" --arg m "$m" --arg c "$c" \
     '.aliases[$a] = {model: $m} + (if $c == "" then {} else {context: ($c | tonumber)} end)'
   print "added   $a -> $m${c:+ (context $c)}"
-  link_aliases
+  link_aliases -q
+  return 0
 }
 
 update_alias() {
@@ -211,7 +248,8 @@ remove_alias() {
   local a
   for a in "$@"; do need_alias "$a"; done
   write_aliases --args 'reduce $ARGS.positional[] as $a (.; del(.aliases[$a]))' "$@"
-  link_aliases
+  link_aliases -q
+  return 0
 }
 
 # Replaces this script with the one from the newest version tag on GitHub; aliases.json is kept.
@@ -539,7 +577,9 @@ Aliases:
                                                 validate and set an alias property:
                                                 model, small (OpenRouter model id), context (tokens)
   claude-or --remove <alias>...                 remove alias(es) and their symlinks
-  claude-or --link                              sync symlinks with aliases.json
+  claude-or --link                              sync symlinks with aliases.json and show each alias:
+                                                linked, ok, skipped/unlinked (with the reason, e.g.
+                                                another command of that name exists), removed
   claude-or --unlink                            remove all alias symlinks; aliases.json is kept,
                                                 so claude-or <alias> still works
 

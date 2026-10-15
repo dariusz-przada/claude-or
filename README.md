@@ -79,7 +79,7 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --add <alias> <model-id> [context]` | Validate and add an alias to `aliases.json`, then `--link` |
 | `claude-or --update <alias> <property> <value>` | Validate and set an alias's `model`, `small` or `context` |
 | `claude-or --remove <alias>...` | Remove alias(es) from `aliases.json` and their symlinks |
-| `claude-or --link` | Sync symlinks with `aliases.json` (create new, remove deleted) |
+| `claude-or --link` | Sync symlinks with `aliases.json` (create new, remove deleted) and show the status of each alias, with the reason when it can't be linked |
 | `claude-or --unlink` | Remove all alias symlinks, keeping `aliases.json` |
 | **OpenRouter keys** | |
 | `claude-or --key-add <name> [key]` | Verify an OpenRouter key and save it under a name; without `[key]` it's read from a hidden prompt or a pipe |
@@ -227,7 +227,8 @@ claude-or --add ccluna openai/gpt-6-luna 500000     # or set it yourself
 Before writing anything, `--add` checks that:
 
 - the alias name is valid (letters, digits, `.`, `_`, `-`) and not already in `aliases.json`;
-- the name doesn't clash with an existing command in `PATH`, such as `ls` or `claude`;
+- the name doesn't clash with an existing command in `PATH` (such as `ls` or `claude`), a shell
+  builtin or keyword (such as `cd` or `echo`), or a file that's already next to the script;
 - the model exists on OpenRouter. It warns if the model doesn't list tool support. If OpenRouter
   can't be reached, it adds the alias anyway with a warning.
 
@@ -262,6 +263,23 @@ existing alias, [`--update`](#change-an-alias) is simpler.
    ```
    `--link` refuses a name that already exists as another command, so an alias can't shadow a
    real tool. If you create the symlink yourself, check first with `command -v ccluna`.
+
+   `--link` prints one line per alias:
+   ```
+   linked    ccluna       ~/.local/bin/ccluna
+   ok        ccds         already linked
+   skipped   git          another 'git' is already installed: /usr/bin/git
+   unlinked  ccx          another 'ccx' is already installed: /opt/homebrew/bin/ccx
+   removed   ccold        no longer in aliases.json
+   ```
+   - `skipped`: no symlink, because of the reason shown: another command of that name in `PATH`,
+     a shell builtin, an invalid name, or a file that isn't a claude-or symlink.
+   - `unlinked`: the alias was linked, but a command with the same name was installed later. The
+     old symlink is removed so it doesn't hide that command.
+   - Aliases without a symlink still run as `claude-or <alias>`. `--link` exits with status 1 when
+     there are any, and warns if the symlinks' directory isn't in your `PATH`.
+   - Only symlinks that point to `claude-or` are ever created or removed. Files and links that
+     belong to anything else are left alone.
 
 3. **Test it:**
    ```bash
@@ -302,7 +320,8 @@ claude-or --remove ccluna          # one
 claude-or --remove ccluna ccqwen   # several
 ```
 
-It first checks that every name exists, so a typo leaves `aliases.json` untouched. Then it removes
+It first checks that every name exists in `aliases.json`, so a typo leaves it untouched and a
+name that isn't an alias (`claude-or --remove ls`) is refused. Then it removes
 the entries and runs `--link`, which deletes the matching symlinks.
 
 By hand: delete the entry from `aliases.json` and run `claude-or --link`.
