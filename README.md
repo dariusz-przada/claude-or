@@ -88,7 +88,7 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --key-list` | Show saved keys: active (`*`), index, name, masked key |
 | `claude-or --key-switch <index\|name>` | Make a saved key the active one |
 | `claude-or --key-run <index\|name> <alias\|model-id> [claude args...]` | Run an alias or model with a saved key, just this once; the active key stays as it is |
-| `claude-or --stats [index\|name]` | Spend OpenRouter recorded for a saved key (today, week, month, total) and its limit; default: the active key |
+| `claude-or --key-stats [index\|name]` | Spend OpenRouter recorded for a saved key (today, week, month, total) and its limit; default: the active key |
 | **claude-or itself** | |
 | `claude-or --self-update` | Replace the installed script with the latest release tag from GitHub, keeping `aliases.json` |
 | `claude-or --self-factory-reset` | Delete `keys.json`, `aliases.json` and all alias symlinks, after a `[y/N]` confirmation, then restore the default `aliases.json` from GitHub and link it. The script itself, a Keychain entry and `$OPENROUTER_API_KEY` stay |
@@ -147,7 +147,7 @@ claude-or --key-run 1 deepseek/deepseek-v4-flash -p "hi"   # ...or any model id,
 OR_KEY=personal claude-or ccds             # the same with the OR_KEY variable
 OR_KEY=personal ccds                       # through an alias symlink (only OR_KEY works here)
 OR_KEY=2 ccdsf --resume                    # with Claude Code args, key by index
-claude-or --stats                          # spend of the active key, or: --stats 2, --stats work
+claude-or --key-stats                      # spend of the active key, or: --key-stats 2, --key-stats work
 # key         work (sk-or...123c), active
 # today       $0.42
 # this week   $3.10
@@ -162,7 +162,7 @@ claude-or --stats                          # spend of the active key, or: --stat
 - Names must be unique and use letters, digits, `.`, `_`, `-`, and can't be only digits, so a number
   always means an index. Indexes are positions in the list (1, 2, 3, …): removing a key moves the
   ones after it up.
-- `--stats` asks OpenRouter (`GET /api/v1/key`) what it billed to that key; weeks and months are
+- `--key-stats` asks OpenRouter (`GET /api/v1/key`) what it billed to that key; weeks and months are
   UTC, weeks start on Monday. It shows cost only: OpenRouter doesn't report tokens per key, and
   claude-or never sees Claude Code's API traffic. BYOK spend and a separate budget appear when set.
 - Removing the active key leaves no key active until you `--key-switch` to another one.

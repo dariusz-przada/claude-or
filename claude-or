@@ -16,7 +16,7 @@
 #   claude-or --key-remove <index|name>...             delete saved key(s)
 #   claude-or --key-list                               show saved keys (masked), * = active
 #   claude-or --key-switch <index|name>                make a saved key the active one
-#   claude-or --stats [index|name]                     spend of a saved key on OpenRouter (default: active)
+#   claude-or --key-stats [index|name]                 spend of a saved key on OpenRouter (default: active)
 #   claude-or --key-run <index|name> <alias|model-id> [claude args...]
 #                                                      run with a saved key, active key unchanged
 #   claude-or --self-update                            update to the latest release tag
@@ -517,14 +517,14 @@ utc_time() {
 
 # Shows the spend OpenRouter has recorded for a saved key (default: the active one).
 key_stats() {
-  (( $# <= 1 )) || die "usage: claude-or --stats [index|name]"
+  (( $# <= 1 )) || die "usage: claude-or --key-stats [index|name]"
   local kname resp code active
   need_keys
   active="$(jq -r '.active as $a | .keys[] | select(.name == $a) | .name' "$keysfile")"
   if (( $# )); then
     resolve_key "$1"
   else
-    [[ -n "$active" ]] || die "no active key; claude-or --stats <index|name>"
+    [[ -n "$active" ]] || die "no active key; claude-or --key-stats <index|name>"
     kname="$active"
   fi
 
@@ -679,7 +679,7 @@ OpenRouter keys:
   claude-or --key-remove <index|name>...        delete saved key(s)
   claude-or --key-list                          show saved keys: * active, index, name, masked key
   claude-or --key-switch <index|name>           make a saved key the active one
-  claude-or --stats [index|name]                spend OpenRouter recorded for a saved key: today, week,
+  claude-or --key-stats [index|name]            spend OpenRouter recorded for a saved key: today, week,
                                                 month, total, limit (default: the active key)
   claude-or --key-run <index|name> <alias|model-id> [claude args...]
                                                 run an alias or model with a saved key, just this once;
@@ -742,7 +742,8 @@ case "$name" in
       --key-remove) shift; key_remove "$@"; exit ;;
       --key-list)   shift; key_list "$@"; exit ;;
       --key-switch) shift; key_switch "$@"; exit ;;
-      --stats)      shift; key_stats "$@"; exit ;;
+      --key-stats)  shift; key_stats "$@"; exit ;;
+      --stats)      die "--stats was renamed to --key-stats" ;;
       --key-run)
         # Not an exit: picks the key for this run, then the alias/model below runs as usual.
         (( $# >= 3 )) || die "usage: claude-or --key-run <index|name> <alias|model-id> [claude args...]"
