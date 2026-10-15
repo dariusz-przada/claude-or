@@ -91,8 +91,8 @@ Every command passes the rest of its arguments straight to `claude`, for example
 | `claude-or --key-stats [index\|name]` | Spend OpenRouter recorded for a saved key (today, week, month, total) and its limit; default: the active key |
 | **claude-or itself** | |
 | `claude-or --self-update` | Replace the installed script with the latest release tag from GitHub, keeping `aliases.json` |
-| `claude-or --self-factory-reset` | Delete `keys.json`, `aliases.json` and all alias symlinks, after a `[y/N]` confirmation, then restore the default `aliases.json` from GitHub and link it. The script itself, a Keychain entry and `$OPENROUTER_API_KEY` stay |
-| `claude-or --self-uninstall` | Remove claude-or completely: all alias symlinks, the config dir `~/.config/claude-or/` (aliases, keys) and the `claude-or` script itself, after a `[y/N]` confirmation. A Keychain entry and `$OPENROUTER_API_KEY` stay |
+| `claude-or --self-factory-reset [-y]` | Delete `keys.json`, `aliases.json` and all alias symlinks, after a `[y/N]` confirmation (`-y`/`--yes` skips it), then restore the default `aliases.json` from GitHub and link it. The script itself, a Keychain entry and `$OPENROUTER_API_KEY` stay |
+| `claude-or --self-uninstall [-y]` | Remove claude-or completely: all alias symlinks, the config dir `~/.config/claude-or/` (aliases, keys) and the `claude-or` script itself, after a `[y/N]` confirmation (`-y`/`--yes` skips it). A Keychain entry and `$OPENROUTER_API_KEY` stay |
 | `claude-or`, `claude-or --help` | Help with all commands, examples and your current aliases |
 
 ## Install
@@ -115,7 +115,7 @@ would end up in the clone instead of `~/.local/bin`.
 To start over, run `claude-or --self-factory-reset`: it deletes `keys.json`, `aliases.json` and the
 alias symlinks, then downloads the default `aliases.json` and links it again. The script stays. To
 remove everything, including the script itself, run `claude-or --self-uninstall`. Both list what
-they'll delete and ask first.
+they'll delete and ask first; add `-y` (or `--yes`) to skip the question, e.g. in a script.
 
 ## Files
 

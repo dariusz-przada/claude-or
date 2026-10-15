@@ -20,8 +20,8 @@
 #   claude-or --key-run <index|name> <alias|model-id> [claude args...]
 #                                                      run with a saved key, active key unchanged
 #   claude-or --self-update                            update to the latest release tag
-#   claude-or --self-factory-reset                     delete keys and aliases, restore default aliases
-#   claude-or --self-uninstall                         also delete the config dir and this script
+#   claude-or --self-factory-reset [-y]                delete keys and aliases, restore default aliases
+#   claude-or --self-uninstall [-y]                    also delete the config dir and this script
 #   claude-or [--help]                                 help with examples
 #
 # Config dir: ${XDG_CONFIG_HOME:-~/.config}/claude-or/
@@ -586,11 +586,13 @@ alias_links() {
 }
 
 # Lists paths $@, asks [y/N] on the terminal and deletes them on yes; returns 1 if declined.
+# With -y first it deletes without asking (the list is still printed).
 confirm_delete() {
-  local f
+  local f yes=0
+  [[ "$1" == -y ]] && { yes=1; shift; }
   print "this deletes:"
   for f in "$@"; do print "  $f"; done
-  if ! confirm "Continue?" "nothing deleted"; then
+  if (( ! yes )) && ! confirm "Continue?" "or pass --yes; nothing deleted"; then
     print "nothing deleted"; return 1
   fi
   for f in "$@"; do
@@ -610,9 +612,10 @@ kept_key_notes() {
 # Deletes keys.json, aliases.json and the alias symlinks after a confirmation, then puts back the
 # default aliases.json from GitHub and links it; the script stays.
 self_factory_reset() {
-  (( $# == 0 )) || die "usage: claude-or --self-factory-reset"
   local f defaults
-  local -a files
+  local -a files y
+  [[ "$1" == (-y|--yes) ]] && { y=(-y); shift; }
+  (( $# == 0 )) || die "usage: claude-or --self-factory-reset [-y]"
   need_jq
   # Fetch the defaults first, so a failed download leaves everything as it was.
   defaults="$(curl -fsSL -m 20 "https://raw.githubusercontent.com/$repo/main/aliases.json" 2>/dev/null)"
@@ -623,7 +626,7 @@ self_factory_reset() {
   files+=(${(f)"$(alias_links)"})
   if (( $#files )); then
     print "factory reset: deletes the files below, then restores the default aliases.json and its symlinks"
-    confirm_delete $files || return 0
+    confirm_delete $y $files || return 0
   fi
   mkdir -p "$cfgdir" && print -r -- "$defaults" > "$aliasfile" || die "can't write $aliasfile"
   print "restored default $aliasfile"
@@ -633,13 +636,14 @@ self_factory_reset() {
 
 # Deletes the alias symlinks, the whole config dir and this script after a confirmation.
 self_uninstall() {
-  (( $# == 0 )) || die "usage: claude-or --self-uninstall"
-  local -a files
+  local -a files y
+  [[ "$1" == (-y|--yes) ]] && { y=(-y); shift; }
+  (( $# == 0 )) || die "usage: claude-or --self-uninstall [-y]"
   files=(${(f)"$(alias_links)"})
   # cfgdir always ends in /claude-or, so this never removes a shared config dir.
   [[ -e "$cfgdir" && "${cfgdir:t}" == claude-or ]] && files+=("$cfgdir")
   files+=("$self")
-  confirm_delete $files || return 0
+  confirm_delete $y $files || return 0
   kept_key_notes
   print "claude-or is uninstalled"
 }
@@ -687,10 +691,10 @@ OpenRouter keys:
 
 claude-or itself:
   claude-or --self-update                       update to the latest release tag (aliases.json kept)
-  claude-or --self-factory-reset                delete keys.json, aliases.json and alias symlinks,
-                                                then restore the default aliases (asks first)
-  claude-or --self-uninstall                    delete alias symlinks, the config dir and claude-or
-                                                itself (asks first)
+  claude-or --self-factory-reset [-y]           delete keys.json, aliases.json and alias symlinks,
+                                                then restore the default aliases (asks first; -y: don't)
+  claude-or --self-uninstall [-y]               delete alias symlinks, the config dir and claude-or
+                                                itself (asks first; -y: don't)
   claude-or --help                              this help
 
 Examples:
