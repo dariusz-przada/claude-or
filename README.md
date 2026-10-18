@@ -1,23 +1,36 @@
-# Claude Code + OpenRouter (DeepSeek, Kimi, GLM, Qwen…)
+# claude-or
 
-Run the Claude Code CLI against any model on [OpenRouter](https://openrouter.ai) through its
-Anthropic-compatible endpoint, using short commands that you define yourself, for example
-`ccds` for DeepSeek V4 Pro.
+Run Claude Code on macOS and Linux with models available through [OpenRouter](https://openrouter.ai).
+
+## Why this project exists
+
+Claude Code normally uses the Anthropic or claude.ai login configured on your machine. `claude-or`
+starts one Claude Code process against an OpenRouter model (DeepSeek, Kimi, GLM, Qwen…) through
+its Anthropic-compatible endpoint, without changing your normal Claude Code setup.
+
+The workflow looks like this:
+
+```bash
+ccds -p "Explain this repository"
+ccqwen --resume
+claude-or --list
+```
 
 - **You choose the commands.** Each one is an alias in
-  [`aliases.json`](#aliases-config-file-aliasesjson) that maps a name to an OpenRouter model. Add,
-  change or remove them with `claude-or --add` / `--update` / `--remove` or by editing the file.
-  You never need to touch the script.
+  [`aliases.json`](#aliases-config-file-aliasesjson) that maps a short name to an OpenRouter model.
+  Add, change or remove them with `claude-or --add` / `--update` / `--remove` or by editing the
+  file. You never need to touch the script.
 - The environment variables apply only to that one `claude` process. Plain `claude` keeps using
   your normal Anthropic / claude.ai login.
 - The commands are real executables in `PATH`, not shell aliases, so they also work from scripts
   and when a running Claude Code session calls them via its Bash tool.
 - Runs on macOS or Linux with `zsh`, `curl`, [`jq`](#jq) and [Claude Code](#claude-code-cli). On Linux
   there is no Keychain, so save the key with `claude-or --key-add` or use the env var
-  (see [API key](#api-key)).
+  (see [API key](#api-key)). On Windows, see [win-claude-or](#windows-and-powershell).
 
 ## Contents
 
+- [Why this project exists](#why-this-project-exists)
 - [Requirements](#requirements)
   - [Claude Code CLI](#claude-code-cli)
   - [`jq`](#jq)
