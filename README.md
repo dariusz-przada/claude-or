@@ -12,13 +12,15 @@ Anthropic-compatible endpoint, using short commands that you define yourself, fo
   your normal Anthropic / claude.ai login.
 - The commands are real executables in `PATH`, not shell aliases, so they also work from scripts
   and when a running Claude Code session calls them via its Bash tool.
-- Runs on macOS or Linux with `zsh`, `curl`, [`jq`](#requirements-jq) and Claude Code. On Linux
+- Runs on macOS or Linux with `zsh`, `curl`, [`jq`](#jq) and [Claude Code](#claude-code-cli). On Linux
   there is no Keychain, so save the key with `claude-or --key-add` or use the env var
   (see [API key](#api-key)).
 
 ## Contents
 
-- [Requirements: `jq`](#requirements-jq)
+- [Requirements](#requirements)
+  - [Claude Code CLI](#claude-code-cli)
+  - [`jq`](#jq)
 - [Commands](#commands)
 - [Install](#install)
 - [Files](#files)
@@ -35,7 +37,17 @@ Anthropic-compatible endpoint, using short commands that you define yourself, fo
 - [Expected warnings](#expected-warnings)
 - [What it sets](#what-it-sets)
 
-## Requirements: `jq`
+## Requirements
+
+### Claude Code CLI
+
+Required. `claude-or` and every alias start the `claude` command, so the Claude Code CLI must be
+installed and in `PATH`. Follow the official
+[installation guide](https://code.claude.com/docs/en/setup).
+
+Check with `claude --version`.
+
+### `jq`
 
 Aliases (`aliases.json`, `--add`, `--update`, `--remove`, `--list`, `--sync`, `--link`, `--unlink`) and the
 [key manager](#api-key) (`--key-*`) need [`jq`](https://jqlang.org).
