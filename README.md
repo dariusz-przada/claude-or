@@ -36,6 +36,7 @@ Anthropic-compatible endpoint, using short commands that you define yourself, fo
 - [Delegating from a Claude Code session](#delegating-from-a-claude-code-session)
 - [Expected warnings](#expected-warnings)
 - [What it sets](#what-it-sets)
+- [Windows and PowerShell](#windows-and-powershell)
 
 ## Requirements
 
@@ -431,3 +432,8 @@ CLAUDE_CODE_MAX_CONTEXT_TOKENS = context  # only when set
 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 CLAUDECODE unset                          # allows launching from inside a Claude Code session
 ```
+
+## Windows and PowerShell
+
+Looking for a similar tool for Windows and PowerShell? See
+[win-claude-or](https://github.com/tatonkoduje/win-claude-or).
